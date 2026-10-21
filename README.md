@@ -4,20 +4,54 @@ flarewall keeps a set of Cloudflare zones on one security baseline. You write th
 
 It targets the Cloudflare Free plan: 5 custom rules, 1 rate limiting rule with a 10 second period, and no `matches` operator.
 
-## Status
+## Install
 
-Planning. There is no code yet, and nothing installs. The plan is in [docs/plans/0001-plan-flarewall-2026-10-21.md](docs/plans/0001-plan-flarewall-2026-10-21.md), and the research behind its decisions is in [docs/research/0001-research-flarewall-open-questions-2026-10-21.md](docs/research/0001-research-flarewall-open-questions-2026-10-21.md).
+flarewall needs Node 22 or later.
 
-## Planned commands
+```sh
+npm install -g flarewall
+```
+
+## Setup
+
+- Set `CLOUDFLARE_API_TOKEN` to a Cloudflare user token. flarewall reads the token from this variable only and never writes it to a file. Use a read-only token for `status` and `diff`, and a write token for `apply` and `restore`.
+- Set `FLAREWALL_DATA` to the path of your private data repo, or pass `--data <path>` to each command.
+- Run `flarewall init` once to copy the default baseline to `<data>/baseline.yaml`, then edit that file.
+- Run `flarewall add <zone>` for each zone. It writes `inventory/<account-id>/<zone>.yaml`. Set the host roles in that file before you apply.
+
+## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `flarewall status` | Prints one row per zone: plan, and whether the zone is in sync or has drifted. |
-| `flarewall diff` | Prints the changes between each zone's live state and its rendered baseline. |
-| `flarewall apply` | Sends the baseline to a zone. It is a dry run unless you pass the write flag. |
-| `flarewall tui` | Opens a terminal UI over `status`, `diff`, and `apply`. |
+| `flarewall init` | Copies the default baseline to `<data>/baseline.yaml`. It never overwrites an existing file. |
+| `flarewall add <zone>` | Writes an inventory file for a zone with no entry. The zone's proxied hostnames go in as comments. |
+| `flarewall status [zone...]` | Prints one row per zone: name, plan, and state (`in sync`, `drift`, `legacy`, `not managed`, or `error`). Covers every zone by default. |
+| `flarewall diff [zone...]` | Prints the changes per zone, plus the unowned and legacy rules. Covers every zone by default. |
+| `flarewall apply <zone...>` or `flarewall apply --all` | Sends the rendered baseline to the zones. Without `--write` it is a dry run that prints what it would send. |
+| `flarewall restore <zone> <backup-dir>` | Sends a backup back to a zone. Without `--write` it is a dry run that prints what it would send. `<backup-dir>` is a path, or a directory name under `<data>/backups/<zone>/`. |
 
-`apply` backs up the current rulesets and zone settings before it writes. It asks for confirmation per zone, then reads back what it sent. A failure in one zone does not stop the others. Rollback means restoring that backup.
+Flags:
+
+- `--data <path>` sets the data repo path and overrides `FLAREWALL_DATA`.
+- `--all` makes `apply` cover every inventory zone. `apply` needs zone names or `--all`.
+- `--write` makes `apply` and `restore` send the writes. Each zone gets a backup first, then a confirmation prompt, then the writes, then a read-back.
+- `--yes` skips the per-zone prompt. With `--write`, no terminal on stdin, and no `--yes`, the command refuses to start.
+
+`apply` keeps every rule that has no `flarewall_` ref, after the flarewall rules. It replaces the rules the old `cf-security-setup.sh` script wrote and keeps their rule `id`. Before any write it checks the Free plan limits (5 custom rules, 1 rate limiting rule, 10 redirect rules) on the total of flarewall and other rules, and skips a zone that would go over. A failure in one zone is reported, and the run continues with the next zone.
+
+Backups go to `<data>/backups/<zone>/<UTC time>/`, for example `20261021T081500Z`, as one JSON file per ruleset phase plus `always_use_https.json`, `browser_check.json`, and `bot_management.json`. flarewall prints the path and never runs git, so commit the backups yourself.
+
+## Exit codes
+
+| Command | 0 | 1 | 2 |
+|---------|---|---|---|
+| `status`, `diff` | every zone in sync or not managed | a zone has drift or legacy rules | an error, such as an API failure or a bad data file |
+| `apply`, `restore` | every zone succeeded or was declined | not used | a zone failed (limit, API error, read-back mismatch), or a usage error |
+| `init`, `add` | done | not used | an error |
+
+## Status
+
+Version 0.1.0 covers `init`, `add`, `status`, `diff`, `apply`, and `restore`. The plan is in [docs/plans/0001-plan-flarewall-2026-10-21.md](docs/plans/0001-plan-flarewall-2026-10-21.md). A scheduled drift check and a terminal UI come later.
 
 ## What the baseline covers
 
@@ -39,7 +73,7 @@ This repo holds code and a generic default baseline. Your zone inventory, host r
 
 flarewall reads a Cloudflare API token from `CLOUDFLARE_API_TOKEN` and never writes it to a file. A `wrangler` or `cf` login will not work, since those OAuth scopes have no access to WAF rules, zone settings, or Bot Management.
 
-Plan on two user tokens. A read-only one covers `status`, `diff`, and the scheduled check. A write token, kept on your own machine, covers `apply`.
+Plan on two user tokens. A read-only one covers `status`, `diff`, and the scheduled check. A write token, kept on your own machine, covers `apply` and `restore`.
 
 ## Stack
 

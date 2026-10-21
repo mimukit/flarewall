@@ -1,0 +1,16 @@
+[
+  {
+    "action": "block",
+    "description": "Rate limit per IP",
+    "expression": "(starts_with(http.request.uri.path, \"/\"))",
+    "ratelimit": {
+      "characteristics": [
+        "cf.colo.id",
+        "ip.src"
+      ],
+      "period": 10,
+      "requests_per_period": 300,
+      "mitigation_timeout": 10
+    }
+  }
+]

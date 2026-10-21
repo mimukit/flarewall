@@ -1,0 +1,146 @@
+# flarewall default baseline.
+#
+# `flarewall init` copies this file to <data>/baseline.yaml. Edit that copy, not this one.
+# One baseline covers every zone. Each zone's inventory file sets the parameters:
+# host roles, geo on or off and its country, redirect mode, and an optional rate limit.
+#
+# Rule expressions are templates. flarewall fills these placeholders per zone:
+#   {{unless_api}}        " and not http.host in {...}" for the zone's API hosts, or empty
+#   {{unless_wordpress}}  the same for the zone's WordPress hosts
+#   {{exempt}}            verified bots, ACME challenges, API hosts, and WordPress origin IPs
+#                         (proxied A and AAAA records of the WordPress hosts)
+#   {{asns}}              the hosting_asns list as a set: {8075 16509 ...}
+#   {{probe_paths}}       the probe_paths list as clauses joined with "or"
+#   {{geo_country}}       the inventory geo.country (only when geo is enabled)
+#   {{rate_requests}}     the inventory rate_limit.requests, else rate_limit.requests below
+#   {{source_host}}       redirect source: www.<zone> for "root" mode, <zone> for "www" mode
+#   {{target_host}}       redirect target: <zone> for "root" mode, www.<zone> for "www" mode
+#
+# `when` sets the condition for a rule or setting:
+#   always          every zone (the default for a rule)
+#   geo             the inventory turns geo on
+#   no_api_hosts    the zone has no API host
+#   no_hosts        the zone has no API host and no WordPress host
+#   canonical_host  the inventory redirect mode is root or www
+#
+# Every ref starts with flarewall_. flarewall owns only the rules with that prefix.
+# Free plan limits: 5 custom rules, 1 rate limiting rule with a 10 s period, 10 redirect rules.
+
+version: 1
+
+rate_limit:
+  requests: 300
+
+# Hosting and cloud networks to challenge: Microsoft, Amazon, Google Cloud, Oracle,
+# DigitalOcean, Hetzner, OVH, Linode, Vultr, Tencent, Alibaba, TECHOFF.
+hosting_asns:
+  [8075, 16509, 14618, 396982, 31898, 14061, 24940, 16276, 63949, 20473, 132203, 45090, 37963, 45102, 48090]
+
+# Scanner paths that no Worker and no WordPress site serves. The match is on the
+# lower-case path. %25 catches a double-encoded path, which Cloudflare does not decode.
+probe_paths:
+  - contains: ".env"
+  - contains: "/.git"
+  - contains: "/.aws/"
+  - contains: "/.svn"
+  - contains: "/.ds_store"
+  - contains: "/.vscode"
+  - contains: "%25"
+  - contains: "phpinfo"
+  - contains: "wp-config.php"
+  - contains: "/phpmyadmin"
+  - contains: "/actuator"
+  - contains: "/server-status"
+  - contains: "laravel-filemanager"
+  - ends_with: ".ini"
+  - ends_with: ".sql"
+  - ends_with: ".bak"
+  - ends_with: ".sh"
+  - ends_with: ".cgi"
+  - ends_with: ".jsp"
+  - ends_with: ".yml"
+  - ends_with: ".yaml"
+  - ends_with: ".tar.gz"
+  - ends_with: ".tgz"
+  - ends_with: "/xmlrpc.php"
+  - starts_with: "/vendor/"
+  - starts_with: "/cgi-bin/"
+  - starts_with: "/venv/"
+
+rules:
+  http_request_firewall_custom:
+    - ref: flarewall_ports
+      description: "flarewall: block non-standard ports"
+      action: block
+      expression: "(cf.edge.server_port ne 443 and cf.edge.server_port ne 80)"
+
+    # An empty user agent is blocked except on API hosts, whose server clients may send none.
+    # A Worker has no PHP, so every .php or /wp- path is a probe, except on WordPress hosts.
+    - ref: flarewall_probes
+      description: "flarewall: block scanner probes"
+      action: block
+      expression: '(http.user_agent eq ""{{unless_api}}) or {{probe_paths}} or ((ends_with(lower(http.request.uri.path), ".php") or starts_with(lower(http.request.uri.path), "/wp-")){{unless_wordpress}})'
+
+    - ref: flarewall_hosting
+      description: "flarewall: challenge hosting networks (verified bots, API hosts, origins allowed)"
+      action: managed_challenge
+      expression: "(ip.src.asnum in {{asns}}{{exempt}})"
+
+    - ref: flarewall_geo
+      description: "flarewall: challenge traffic from outside the home country (verified bots, API hosts, origins allowed)"
+      action: managed_challenge
+      when: geo
+      expression: '(ip.src.country ne "{{geo_country}}"{{exempt}})'
+
+  # The Free plan allows only the path and verified bot fields here, so the rule matches every path.
+  http_ratelimit:
+    - ref: flarewall_rate_limit
+      description: "flarewall: rate limit per IP and data center"
+      action: block
+      expression: '(starts_with(http.request.uri.path, "/"))'
+      ratelimit:
+        characteristics: [cf.colo.id, ip.src]
+        period: 10
+        requests_per_period: "{{rate_requests}}"
+        mitigation_timeout: 10
+
+  # The first matching redirect wins, so HTTP to HTTPS comes first.
+  # The whole phase is left alone when the inventory sets `redirects: skip`.
+  http_request_dynamic_redirect:
+    - ref: flarewall_https
+      description: "flarewall: redirect HTTP to HTTPS"
+      action: redirect
+      expression: "(not ssl)"
+      action_parameters:
+        from_value:
+          status_code: 301
+          preserve_query_string: true
+          target_url:
+            expression: 'concat("https://", http.host, http.request.uri.path)'
+
+    - ref: flarewall_canonical_host
+      description: "flarewall: redirect to the canonical host"
+      action: redirect
+      when: canonical_host
+      expression: '(http.host eq "{{source_host}}")'
+      action_parameters:
+        from_value:
+          status_code: 301
+          preserve_query_string: true
+          target_url:
+            expression: 'concat("https://{{target_host}}", http.request.uri.path)'
+
+# Zone settings. Browser Integrity Check and Bot Fight Mode are zone-wide and cannot be
+# scoped to a host, so flarewall manages them only on zones whose hosts allow it.
+settings:
+  always_use_https:
+    value: "on"
+  browser_check:
+    value: "on"
+    when: no_api_hosts
+
+# Bot Fight Mode needs JavaScript detections; Cloudflare rejects fight_mode without enable_js.
+bot_management:
+  fight_mode: true
+  enable_js: true
+  when: no_hosts

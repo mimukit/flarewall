@@ -16,7 +16,12 @@ The plan is `docs/plans/0001-plan-flarewall-2026-10-21.md`. Its Design decisions
 
 ## Build and test
 
-There is no code yet. When the first package lands, put its install, build, and test commands here.
+- Install: `pnpm install`
+- Typecheck: `pnpm typecheck`
+- Test: `pnpm test` (update render snapshots with `pnpm test -u` only after you check the change)
+- Build: `pnpm build` (compiles `src/` to `dist/` and copies `src/baseline/default.yaml` to `dist/baseline/`)
+- Private string check: `FLAREWALL_PRIVATE_STRINGS='<one string per line>' pnpm check:private`
+- Package contents: `npm pack --dry-run`
 
 ## Rules for agents
 

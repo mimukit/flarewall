@@ -230,18 +230,18 @@ Evidence:
 
 ## 9. What the open-source version must strip or generalise
 
-This is a design question. The list comes from a read of `brainaloy-dokploy/scripts/cf-security-setup.sh`.
+This is a design question. The list comes from a read of `cf-security-setup.sh`.
 
 | Item in the current script | Change |
 |----------------------------|--------|
-| Geo rule country `BD` | A required `geo.country` parameter; the geo rule is off by default |
+| Geo rule country, hard-coded in the script | A required `geo.country` parameter; the geo rule is off by default |
 | Rate limit 300 per 10 s | Keep 300 as a documented default; the inventory can override it |
-| Hosting ASN list | Keep it. These are public networks. Remove the comment that names `mimukit.com` and the 2026-10-13 traffic numbers. |
-| Summary text that names `brainaloy-vps-cf-tunnel` | Remove it |
+| Hosting ASN list | Keep it. These are public networks. Remove the comment that names the source zone and the 2026-10-13 traffic numbers. |
+| Summary text that names an internal Worker | Remove it |
 | Backup folder `cf-backup/` in the working directory | Write backups to the private data repo path only |
 | Test fixtures | Use `example.com` hosts and RFC 5737 IP addresses |
 
-Add a CI check in the tool repo that fails on a list of private strings (client zone names, account IDs, `brainaloy`), and run gitleaks for tokens. The private list lives in the data repo, so the CI job reads it from a secret.
+Add a CI check in the tool repo that fails on a list of private strings (client zone names, account IDs, the business name), and run gitleaks for tokens. The private list lives in the data repo, so the CI job reads it from a secret.
 
 ## 10. How the skill writes its proposal
 

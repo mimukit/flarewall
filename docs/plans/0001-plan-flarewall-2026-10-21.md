@@ -4,9 +4,9 @@ Grilled: 2026-10-21
 
 ## Context
 
-The owner runs Brainaloy, a technical consultancy that manages websites and services for mostly non-technical clients. The client zones sit in 10 to 50 Cloudflare zones across several accounts, and a new zone arrives about once a month. Scanner and bot traffic hits these zones thousands of times a day. On 2026-10-13, hosting networks sent 821 of 848 mitigated requests on one zone.
+The owner runs a technical consultancy that manages websites and services for mostly non-technical clients. The client zones sit in 10 to 50 Cloudflare zones across several accounts, and a new zone arrives about once a month. Scanner and bot traffic hits these zones thousands of times a day. On 2026-10-13, hosting networks sent 821 of 848 mitigated requests on one zone.
 
-Today the protection comes from `brainaloy-dokploy/scripts/cf-security-setup.sh`, a 387-line bash script with a plan at `brainaloy-dokploy/docs/plans/0001-plan-cf-security-setup-2026-10-05.md`. The script applies a fixed rule set per zone, with a dry run by default, a backup, and a read-back. It cannot show the state of all zones on one screen, it cannot detect drift, and each rule change from traffic analysis is a manual edit of the script.
+Today the protection comes from `cf-security-setup.sh`, a 387-line bash script in a private repo, with its own plan there. The script applies a fixed rule set per zone, with a dry run by default, a backup, and a read-back. It cannot show the state of all zones on one screen, it cannot detect drift, and each rule change from traffic analysis is a manual edit of the script.
 
 flarewall replaces the script with one tool that does three jobs: apply a baseline to a zone, watch all zones for drift from that baseline, and tune the baseline from Security Events. The owner is the first and only user. The package is public on npm under the MIT license from its first release, so the code must hold no personal or client data.
 
@@ -54,14 +54,14 @@ Success means the owner sees every zone and its drift state in one view, brings 
 | Tests | Vitest. The core takes an injected API client, and tests use a fake client with JSON fixtures on `example.com` hosts. No test calls a live zone. |
 | Live checks | Agents build every phase against the fake client. The owner runs each `Done when:` step that calls Cloudflare or GitHub Actions. This box holds no Cloudflare token. |
 | Issues | Issue #1 covers Phases 1 to 4. Phases 5, 6, 7, and 8 each get their own issue. Filing them is approved. |
-| Second repo | Phase 8 may open a pull request on `brainaloy-dokploy`. The owner merges it. |
+| Second repo | Phase 8 may open a pull request on the repo that holds the old script. The private data repo names that repo. The owner merges it. |
 | Skill output | The skill opens a branch and a pull request on the private data repo. A workflow there posts the `flarewall diff` output on the pull request. The skill never holds the write token. |
 
 ## Approach
 
 Build the core first, and port the current script's behaviour into it as the first baseline. Add the read-only commands before the write command, so the owner can trust `diff` before `apply` touches a zone. Build the TUI and the skill last, on top of a core that already works from the command line.
 
-This reuses the decisions in `brainaloy-dokploy/docs/plans/0001-plan-cf-security-setup-2026-10-05.md` and the debug notes in `brainaloy-dokploy/docs/debug/0001-debug-cf-bot-management-2026-10-17.md`. Those files record why each rule and each exception exists. The test `brainaloy-dokploy/tests/test_cf_security_redirects.py` shows the redirect rule cases to keep.
+This reuses the decisions in the old script's own plan and debug notes, which record why each rule and each exception exists, and the redirect rule cases in its test suite. All three live in the old script's private repo.
 
 Rejected alternatives:
 
@@ -79,13 +79,13 @@ Done when: a research note in `docs/research/` has one table row per required ca
 
 Status: done on 2026-10-21. The note is `docs/research/0001-research-flarewall-open-questions-2026-10-21.md`, and the picks are in Design decisions.
 
-### Phase 2: baseline format and render (#1)
+### Phase 2: baseline format and render (#1) (built 2026-10-21)
 
 Define the baseline file format and the zone inventory format, both with `version: 1`. Write the default baseline from the current script's rule set. Write a `render` step that takes a baseline and one zone's inventory entry and produces the exact API payloads. Add `flarewall init`, which copies the default baseline into the data repo. Add the strip CI: the private string check and gitleaks. Change the repo `LICENSE` to MIT and add the `files` allowlist to `package.json`.
 
 Done when: a test renders the payloads for a fixture zone with API hosts and WordPress hosts, and the output matches the JSON that `cf-security-setup.sh` builds for the same input, except for the `flarewall_` refs and the geo country parameter. The strip CI passes on the branch.
 
-### Phase 3: status and diff (#1)
+### Phase 3: status and diff (#1) (built 2026-10-21)
 
 Attended: the owner runs the live checks with a read-only token.
 
@@ -93,7 +93,7 @@ Read the live state of each zone in the inventory and compare it with the render
 
 Done when: `flarewall status` on a zone that the current script hardened prints `legacy`, and on a zone with a manual rule edit in the dashboard it prints `drift` and `diff` names the changed rule. `flarewall add` writes an inventory file for a zone with no entry. The owner has published `flarewall@0.1.0` to npm.
 
-### Phase 4: apply (#1)
+### Phase 4: apply (#1) (built 2026-10-21)
 
 Attended: the owner runs every `--write` step. No agent runs one.
 
@@ -101,7 +101,7 @@ Send the rendered baseline to a zone, with dry run as the default, backup before
 
 Done when: `apply` on a test zone in dry run mode changes nothing, `apply --write` on a script-hardened test zone brings it to the baseline with no duplicate rules, and `status` then prints `in sync`. `restore --write` of the backup from that run brings the zone back to its earlier state.
 
-### Phase 5: scheduled drift alert
+### Phase 5: scheduled drift alert (#2)
 
 Attended: the owner creates the private data repo and a read-only API token, and runs the live check.
 
@@ -109,7 +109,7 @@ Run `diff` on a schedule in GitHub Actions with the read-only token and an exact
 
 Done when: a manual dashboard edit on a test zone produces an alert within one scheduled run, a run with no drift sends nothing, and a run with a revoked token opens a `drift-run-failed` issue.
 
-### Phase 6: TUI
+### Phase 6: TUI (#3)
 
 Attended: the owner approves a screen sketch before the build.
 
@@ -117,7 +117,7 @@ Build a TUI over `status`, `diff`, and `apply`. It shows all zones, their drift 
 
 Done when: the TUI lists every inventory zone with the same drift state that `flarewall status` prints, and an apply from the TUI writes the same backup as the CLI.
 
-### Phase 7: flarewall skill
+### Phase 7: flarewall skill (#4)
 
 Attended: the owner runs the live check against a zone's Security Events.
 
@@ -125,11 +125,11 @@ Write the agent skill. It reads Security Events for a zone, finds traffic that p
 
 Done when: on a zone with logged probe traffic that passes the baseline, the skill proposes a baseline edit, and `flarewall diff` shows the new rule for that zone with no change sent.
 
-### Phase 8: retire the bash script
+### Phase 8: retire the bash script (#5)
 
-Open a pull request on `brainaloy-dokploy` that points it at flarewall and removes `scripts/cf-security-setup.sh` and its wiki page there, or marks them as superseded. The owner merges it.
+Open a pull request on the old script's repo that points it at flarewall and removes `scripts/cf-security-setup.sh` and its wiki page there, or marks them as superseded. The owner merges it.
 
-Done when: the `brainaloy-dokploy` README names flarewall as the tool for Cloudflare hardening, and no doc there tells the reader to run the old script.
+Done when: the old script's repo README names flarewall as the tool for Cloudflare hardening, and no doc there tells the reader to run the old script.
 
 ## Migration and rollback
 
