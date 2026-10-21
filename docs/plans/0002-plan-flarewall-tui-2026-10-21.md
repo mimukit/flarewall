@@ -14,7 +14,7 @@ Success: the owner opens `flarewall tui`, sees every inventory zone with the sta
 
 | Decision | Resolution |
 |----------|-----------|
-| Scope | Read and apply. The TUI shows status and diff for every zone, refreshes, dry-runs, and applies. `restore`, `add`, and `init` stay in the CLI. |
+| Scope | Read and apply. The TUI shows status and diff for every zone, refreshes, dry-runs, applies, and adds a zone with `+`. `restore` and `init` stay in the CLI. |
 | Screen sketch | Layout A, two panes: the zone list on the left, the diff or plan of the selected zone on the right, a header with counts per state, and a mode chip with key hints at the bottom. The owner approved it on 2026-10-21. [Screen sketch](#screen-sketch) holds the text form. |
 | Key map | Vim keys with the arrow keys as aliases, in the style of lazygit and zellij. Five modes: NORMAL, FILTER, CONFIRM, RUNNING, and the help overlay. The full map is in [Key map](#key-map). The owner approved every row on 2026-10-21, including marks, sort, and value detail. |
 | Write gate | No start flag. `a` starts a write on the marked zones, or on the selected zone when none is marked. Every write zone stops in CONFIRM mode for its own y/N prompt, and the default is no. There is no "yes to all" key. This keeps the CLI's per-zone confirmation. |
@@ -194,7 +194,7 @@ None. The grill on 2026-10-21 settled every question.
 
 ## Non-goals
 
-- `restore`, `add`, and `init` in the TUI.
+- `restore` and `init` in the TUI.
 - Mouse input, themes, and a key map the owner can edit.
 - Writing a token to a file, or a token prompt in the TUI. The token comes from `CLOUDFLARE_API_TOKEN` only.
 - Opening the Cloudflare dashboard or copying to the clipboard. The box is headless.
