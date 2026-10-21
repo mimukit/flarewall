@@ -3,7 +3,8 @@
 import type { BotManagementState, CloudflareApi, LiveRule, SettingId } from './api.js';
 import { comparedRatelimit, diffZone, isOwnedRule, sameValue, type Change, type LiveZone, type ZoneDiff } from './diff.js';
 import { isLegacyRule, legacyTargetRef } from './legacy.js';
-import { PHASES, type DesiredZone, type Phase, type Rule } from './render.js';
+import { PHASES, render, type DesiredZone, type Phase, type Rule } from './render.js';
+import type { Baseline, Inventory } from './schema.js';
 import { readLiveZone } from './status.js';
 
 /** The rule fields flarewall sends: a restore keeps only these, and an owned rule carries no others. */
@@ -265,6 +266,12 @@ export async function applyZone(api: CloudflareApi, zone: ZoneRef, desired: Desi
     throw new ApplyError(`read-back is ${after.state}, not in sync: ${detail.join('; ')} (backup: ${backupPath})`);
   }
   return { outcome: 'applied', plan, backupPath };
+}
+
+/** Renders one inventory zone against its live DNS records, then applies it with `applyZone`. */
+export async function applyInventoryZone(api: CloudflareApi, baseline: Baseline, inventory: Inventory, opts: WriteOptions): Promise<ApplyResult> {
+  const desired = render(baseline, inventory, await api.listDnsRecords(inventory.zone_id));
+  return applyZone(api, { name: inventory.zone, id: inventory.zone_id }, desired, opts);
 }
 
 export interface RestorePlan {

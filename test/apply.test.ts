@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { run, type RunDeps } from '../src/cli/run.js';
 import type { LiveRule } from '../src/core/api.js';
-import { planZone } from '../src/core/apply.js';
+import { applyInventoryZone, planZone } from '../src/core/apply.js';
 import { render, type Phase } from '../src/core/render.js';
 import { parseInventory } from '../src/core/schema.js';
 import { FakeCloudflareApi, liveFromDesired } from './fake-api.js';
@@ -319,5 +319,19 @@ describe('planZone', () => {
     expect(custom?.steps).toContainEqual({ kind: 'remove', id: 'old-ports', description: 'Block non-standard ports' });
     expect(custom?.write).toBe(true);
     expect(plan.phases.find((p) => p.phase === RATE)?.write).toBe(false);
+  });
+});
+
+describe('applyInventoryZone', () => {
+  it('renders the inventory against live DNS and dry-runs the zone with no write', async () => {
+    addLegacyZone();
+    const inventory = parseInventory(readFixture(`legacy-script/${LEGACY_CASE}/inventory.yaml`));
+    const backup = async () => {
+      throw new Error('a dry run writes no backup');
+    };
+    const result = await applyInventoryZone(api, defaultBaseline(), inventory, { backup });
+    expect(result.outcome).toBe('dry run');
+    expect(result.plan.zone).toBe('example.com');
+    expect(api.writes).toEqual([]);
   });
 });

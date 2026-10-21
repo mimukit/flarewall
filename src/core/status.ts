@@ -49,17 +49,23 @@ function message(error: unknown): string {
  * Reports every inventory zone, plus each zone the token can see that has no inventory entry
  * (`not managed`). An error in one zone becomes that zone's `error` state; the other zones still
  * run. `only` narrows the report to the named zones; a named zone found nowhere is an `error`.
- * Rows are sorted by zone name.
+ * Rows are sorted by zone name. `options.onReport` is called once for each report as it is ready,
+ * so a caller can draw each row before the last zone is read.
  */
 export async function statusAll(
   api: CloudflareApi,
   baseline: Baseline,
   inventories: readonly Inventory[],
   only: readonly string[] = [],
+  options: { onReport?: (report: ZoneReport) => void } = {},
 ): Promise<ZoneReport[]> {
   const visible = await api.listZones();
   const wanted = (name: string) => only.length === 0 || only.includes(name);
   const reports: ZoneReport[] = [];
+  const push = (report: ZoneReport) => {
+    reports.push(report);
+    options.onReport?.(report);
+  };
 
   for (const inventory of inventories) {
     if (!wanted(inventory.zone)) continue;
@@ -67,9 +73,9 @@ export async function statusAll(
     const base = { zone: inventory.zone, zoneId: inventory.zone_id, plan };
     try {
       const { diff } = await checkZone(api, baseline, inventory);
-      reports.push({ ...base, state: diff.state, diff });
+      push({ ...base, state: diff.state, diff });
     } catch (error) {
-      reports.push({ ...base, state: 'error', error: message(error) });
+      push({ ...base, state: 'error', error: message(error) });
     }
   }
 
@@ -77,12 +83,12 @@ export async function statusAll(
   const managedNames = new Set(inventories.map((i) => i.zone));
   for (const zone of visible) {
     if (managedIds.has(zone.id) || managedNames.has(zone.name) || !wanted(zone.name)) continue;
-    reports.push({ zone: zone.name, zoneId: zone.id, plan: zone.plan, state: 'not managed' });
+    push({ zone: zone.name, zoneId: zone.id, plan: zone.plan, state: 'not managed' });
   }
 
   for (const name of only) {
     if (!reports.some((r) => r.zone === name)) {
-      reports.push({ zone: name, plan: '', state: 'error', error: 'no inventory entry, and the token cannot see this zone' });
+      push({ zone: name, plan: '', state: 'error', error: 'no inventory entry, and the token cannot see this zone' });
     }
   }
   return reports.sort((a, b) => a.zone.localeCompare(b.zone));

@@ -1,13 +1,12 @@
 // The flarewall command line: init, add, status, diff, apply, restore.
 import { parseArgs } from 'node:util';
 import type { CloudflareApi } from '../core/api.js';
-import { applyZone, restoreZone, type BackupWriter, type RestorePlan, type RuleStep, type ZonePlan } from '../core/apply.js';
-import type { Change, ForeignRule } from '../core/diff.js';
-import { render } from '../core/render.js';
+import { applyInventoryZone, restoreZone, type BackupWriter } from '../core/apply.js';
 import type { Inventory } from '../core/schema.js';
-import { exitCode, statusAll, type ZoneReport } from '../core/status.js';
+import { exitCode, statusAll } from '../core/status.js';
 import { createBackupWriter, readBackup, resolveBackupDir } from '../node/backup.js';
 import { addZone, DataError, initBaseline, loadData, resolveDataDir } from '../node/data.js';
+import { applyOutcomeText, diffLines, planLines, restoreLines, restoreOutcomeText, statusLines } from './format.js';
 
 export interface Io {
   out: (line: string) => void;
@@ -69,110 +68,6 @@ Exit codes (status, diff): 0 in sync, 1 drift or legacy, 2 error
 Exit codes (apply, restore): 0 every zone done or declined, 2 any zone failed or a usage error`;
 
 const TOKEN_MISSING = 'CLOUDFLARE_API_TOKEN is not set; flarewall reads the Cloudflare token from this variable only';
-
-function columns(rows: string[][]): string[] {
-  const widths = rows[0]?.map((_, i) => Math.max(...rows.map((r) => (r[i] ?? '').length))) ?? [];
-  return rows.map((r) => r.map((cell, i) => (i === r.length - 1 ? cell : cell.padEnd(widths[i] ?? 0))).join('  ').trimEnd());
-}
-
-function statusLines(reports: readonly ZoneReport[]): string[] {
-  const rows = [['ZONE', 'PLAN', 'STATE']];
-  for (const r of reports) rows.push([r.zone, r.plan || '-', r.state === 'error' ? `error: ${r.error ?? ''}` : r.state]);
-  return columns(rows);
-}
-
-function show(value: unknown): string {
-  return value === undefined ? '(none)' : JSON.stringify(value);
-}
-
-function changeLine(c: Change): string {
-  switch (c.kind) {
-    case 'missing':
-      return `${c.phase}: missing ${c.ref} "${c.description}"`;
-    case 'extra':
-      return `${c.phase}: extra ${c.ref} "${c.description}"`;
-    case 'changed':
-      return `${c.phase}: changed ${c.ref} "${c.description}" (${c.fields.join(', ')})`;
-    case 'order':
-      return `${c.phase}: order is ${c.actual.join(', ')}; want ${c.expected.join(', ')}`;
-    case 'setting':
-      return `setting ${c.setting}: live ${show(c.actual)}; want ${show(c.expected)}`;
-    case 'bot_management':
-      return `bot management: live ${show(c.actual)}; want ${show(c.expected)}`;
-  }
-}
-
-function foreignLine(kind: string, r: ForeignRule): string {
-  const name = [r.ref, r.description === undefined ? undefined : `"${r.description}"`].filter(Boolean).join(' ') || '(no ref or description)';
-  return `${r.phase}: ${kind} ${name}${r.id ? ` (id ${r.id})` : ''}`;
-}
-
-function diffLines(reports: readonly ZoneReport[]): string[] {
-  const lines: string[] = [];
-  for (const r of reports) {
-    if (r.state === 'error') {
-      lines.push(`${r.zone}: error: ${r.error ?? ''}`);
-      continue;
-    }
-    if (r.state === 'not managed') {
-      lines.push(`${r.zone}: not managed (no inventory entry; run flarewall add ${r.zone})`);
-      continue;
-    }
-    lines.push(`${r.zone}: ${r.state}`);
-    const diff = r.diff;
-    if (diff === undefined) continue;
-    for (const l of diff.legacy) lines.push(`  ${foreignLine('legacy', l)}`);
-    for (const c of diff.changes) lines.push(`  ${changeLine(c)}`);
-    for (const u of diff.unowned) lines.push(`  ${foreignLine('unowned', u)}`);
-  }
-  return lines;
-}
-
-function stepLine(s: RuleStep): string {
-  const id = s.id ? ` (id ${s.id})` : '';
-  switch (s.kind) {
-    case 'create':
-      return `create ${s.ref}`;
-    case 'update':
-      return `update ${s.ref}${id}`;
-    case 'replace':
-      return `replace legacy "${s.legacy}"${id} with ${s.ref}`;
-    case 'keep':
-      return `keep unowned ${[s.ref, s.description === undefined ? undefined : `"${s.description}"`].filter(Boolean).join(' ')}${id}`;
-    case 'remove':
-      return `remove ${[s.ref, s.description === undefined ? undefined : `"${s.description}"`].filter(Boolean).join(' ')}${id}`;
-  }
-}
-
-function planLines(plan: ZonePlan): string[] {
-  if (!plan.hasWrites && plan.limitErrors.length === 0) return [];
-  const lines = [`${plan.zone}: plan`];
-  for (const p of plan.phases) {
-    if (!p.write) {
-      lines.push(`  ${p.phase}: no change`);
-      continue;
-    }
-    lines.push(`  ${p.phase}: send ${p.rules.length} rules (${p.owned} owned, ${p.unowned} unowned)`);
-    for (const s of p.steps) lines.push(`    ${stepLine(s)}`);
-  }
-  for (const s of plan.settings) lines.push(`  setting ${s.id}: ${show(s.live)} -> ${show(s.want)}`);
-  if (plan.botManagement !== undefined) lines.push(`  bot management: ${show(plan.botManagement.live)} -> ${show(plan.botManagement.want)}`);
-  return lines;
-}
-
-function restoreLines(plan: RestorePlan, dir: string): string[] {
-  const lines = [`${plan.zone}: restore from ${dir}`];
-  for (const p of plan.phases) {
-    lines.push(`  ${p.phase}: send ${p.rules.length} rules`);
-    for (const r of p.rules) {
-      const name = [r.ref, r.description === undefined ? undefined : `"${r.description}"`].filter(Boolean).join(' ') || '(no ref or description)';
-      lines.push(`    ${name}${r.id ? ` (id ${r.id})` : ''}`);
-    }
-  }
-  for (const s of plan.settings) lines.push(`  setting ${s.id}: send ${show(s.value)}`);
-  if (plan.botManagement !== undefined) lines.push(`  bot management: send ${show(plan.botManagement)}`);
-  return lines;
-}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -296,20 +191,13 @@ export async function run(
             continue;
           }
           try {
-            const desired = render(baseline, inventory, await api.listDnsRecords(inventory.zone_id));
-            const result = await applyZone(api, { name, id: inventory.zone_id }, desired, {
+            const result = await applyInventoryZone(api, baseline, inventory, {
               ...options,
               onPlan: (plan) => {
                 for (const line of planLines(plan)) io.out(line);
               },
             });
-            const outcome = {
-              'no change': 'in sync, nothing to send',
-              'dry run': 'dry run, nothing sent; pass --write to send',
-              declined: 'declined, nothing sent',
-              applied: 'applied, read-back in sync',
-            }[result.outcome];
-            io.out(`${name}: ${outcome}`);
+            io.out(`${name}: ${applyOutcomeText(result.outcome)}`);
           } catch (error) {
             io.err(`${name}: error: ${message(error)}`);
             failed = true;
@@ -342,12 +230,7 @@ export async function run(
               for (const line of restoreLines(plan, dir)) io.out(line);
             },
           });
-          const outcome = {
-            'dry run': 'dry run, nothing sent; pass --write to send',
-            declined: 'declined, nothing sent',
-            restored: 'restored, read-back matches the backup',
-          }[result.outcome];
-          io.out(`${name}: ${outcome}`);
+          io.out(`${name}: ${restoreOutcomeText(result.outcome)}`);
           return 0;
         } catch (error) {
           io.err(`${name}: error: ${message(error)}`);
