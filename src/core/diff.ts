@@ -63,20 +63,31 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-function sameValue(a: unknown, b: unknown): boolean {
+export function sameValue(a: unknown, b: unknown): boolean {
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
-/** The compared value of one field: enabled defaults to true, ratelimit characteristics are sorted. */
-function fieldValue(rule: Rule | LiveRule, field: ComparedField): unknown {
+/** The ratelimit fields compared, as the old script's read-back does. The API adds others on read. */
+export const COMPARED_RATELIMIT_FIELDS = ['characteristics', 'period', 'requests_per_period', 'mitigation_timeout'] as const;
+
+/** The compared part of a ratelimit object: the fields above only, characteristics sorted. */
+export function comparedRatelimit(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  const ratelimit = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of COMPARED_RATELIMIT_FIELDS) {
+    const v = ratelimit[field];
+    if (v === undefined) continue;
+    out[field] = field === 'characteristics' && Array.isArray(v) ? [...(v as unknown[])].map(String).sort() : v;
+  }
+  return out;
+}
+
+/** The compared value of one field: enabled defaults to true, ratelimit is narrowed. */
+export function fieldValue(rule: Rule | LiveRule, field: ComparedField): unknown {
   const value = rule[field];
   if (field === 'enabled') return value ?? true;
-  if (field === 'ratelimit' && value !== null && typeof value === 'object') {
-    const ratelimit = value as Record<string, unknown>;
-    if (Array.isArray(ratelimit.characteristics)) {
-      return { ...ratelimit, characteristics: [...(ratelimit.characteristics as unknown[])].map(String).sort() };
-    }
-  }
+  if (field === 'ratelimit') return comparedRatelimit(value);
   return value;
 }
 

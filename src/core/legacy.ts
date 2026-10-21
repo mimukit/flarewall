@@ -26,3 +26,28 @@ export function isLegacyRule(rule: RuleIdentity): boolean {
   if (typeof rule.description !== 'string') return false;
   return LEGACY_DESCRIPTIONS.has(rule.description) || LEGACY_GEO_DESCRIPTION.test(rule.description);
 }
+
+/** The flarewall ref that takes the place of each legacy description. */
+const LEGACY_DESCRIPTION_TARGETS: ReadonlyMap<string, string> = new Map([
+  ['Block non-standard ports', 'flarewall_ports'],
+  ['Block scanner probes', 'flarewall_probes'],
+  ['Hosting networks (verified bots, API hosts, origins allowed)', 'flarewall_hosting'],
+  ['Rate limit per IP', 'flarewall_rate_limit'],
+]);
+
+/** The flarewall ref that takes the place of each legacy ref. */
+const LEGACY_REF_TARGETS: ReadonlyMap<string, string> = new Map([
+  ['cf_security_https', 'flarewall_https'],
+  ['cf_security_canonical_host', 'flarewall_canonical_host'],
+]);
+
+/** The ref of the flarewall rule that replaces a legacy rule, or undefined when the rule is not legacy. */
+export function legacyTargetRef(rule: RuleIdentity): string | undefined {
+  if (typeof rule.ref === 'string') {
+    const target = LEGACY_REF_TARGETS.get(rule.ref);
+    if (target !== undefined) return target;
+  }
+  if (typeof rule.description !== 'string') return undefined;
+  if (LEGACY_GEO_DESCRIPTION.test(rule.description)) return 'flarewall_geo';
+  return LEGACY_DESCRIPTION_TARGETS.get(rule.description);
+}

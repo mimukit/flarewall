@@ -40,6 +40,17 @@ describe('diffZone', () => {
     expect(diffZone(desired, live).state).toBe('in sync');
   });
 
+  it('compares only characteristics, period, requests_per_period, and mitigation_timeout in ratelimit', () => {
+    const { desired, live } = setup();
+    const ratelimit = live.phases.http_ratelimit?.[0]?.ratelimit as Record<string, unknown> | undefined;
+    if (ratelimit === undefined) throw new Error('no rate limit rule');
+    ratelimit.requests_to_origin = false;
+    ratelimit.counting_expression = '';
+    expect(diffZone(desired, live).state).toBe('in sync');
+    ratelimit.mitigation_timeout = 60;
+    expect(diffZone(desired, live).changes).toEqual([expect.objectContaining({ kind: 'changed', ref: 'flarewall_rate_limit', fields: ['ratelimit'] })]);
+  });
+
   it('reports owned rule order, a missing rule, and an extra owned rule', () => {
     const { desired, live } = setup();
     const custom = live.phases.http_request_firewall_custom ?? [];
