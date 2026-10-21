@@ -163,3 +163,18 @@ export function diffZone(desired: DesiredZone, live: LiveZone): ZoneDiff {
   else if (diff.changes.length > 0) diff.state = 'drift';
   return diff;
 }
+
+/** The live and wanted value of one field of a `changed` rule. */
+export interface FieldValues {
+  field: ComparedField;
+  live: unknown;
+  want: unknown;
+}
+
+/** The compared values of each field a `changed` change names; [] when a rule is not found. */
+export function changeValues(desired: DesiredZone, live: LiveZone, change: Extract<Change, { kind: 'changed' }>): FieldValues[] {
+  const want = desired.phases[change.phase]?.find((r) => r.ref === change.ref);
+  const have = live.phases[change.phase]?.find((r) => r.ref === change.ref);
+  if (want === undefined || have === undefined) return [];
+  return change.fields.map((field) => ({ field, live: fieldValue(have, field), want: fieldValue(want, field) }));
+}

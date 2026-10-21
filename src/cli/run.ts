@@ -53,6 +53,7 @@ Commands:
   diff [zone...]    Print the changes per zone
   apply <zone...|--all>     Send the baseline to the zones (dry run without --write)
   restore <zone> <backup>   Send a backup directory back to a zone (dry run without --write)
+  tui               Open the terminal UI: every zone's state and diff on one screen
 
 Options:
   --data <path>   The private data repo (default: $FLAREWALL_DATA)
@@ -62,7 +63,7 @@ Options:
   -h, --help      Show this help
 
 Environment:
-  CLOUDFLARE_API_TOKEN  The Cloudflare API token (add, status, diff, apply, restore)
+  CLOUDFLARE_API_TOKEN  The Cloudflare API token (add, status, diff, apply, restore, tui)
 
 Exit codes (status, diff): 0 in sync, 1 drift or legacy, 2 error
 Exit codes (apply, restore): 0 every zone done or declined, 2 any zone failed or a usage error`;
@@ -236,6 +237,22 @@ export async function run(
           io.err(`${name}: error: ${message(error)}`);
           return 2;
         }
+      }
+      case 'tui': {
+        if (rest.length > 0) {
+          io.err(`tui takes no arguments, got: ${rest.join(' ')}`);
+          return 2;
+        }
+        if (!(deps.isTTY ?? process.stdin.isTTY === true)) {
+          io.err('refusing to start the tui: stdin is not a terminal');
+          return 2;
+        }
+        const dataDir = resolveDataDir(parsed.values.data, env);
+        const api = await connect();
+        if (api === undefined) return 2;
+        // A dynamic import, so no other command loads Ink or React.
+        const { startTui } = await import('../tui/main.js');
+        return await startTui({ api, dataDir });
       }
       default:
         io.err(`unknown command: ${command}`);

@@ -39,6 +39,8 @@ export interface ZoneReport {
   diff?: ZoneDiff;
   /** The error message when state is `error`. */
   error?: string;
+  /** The desired and live state the diff came from; set when the zone was read. */
+  detail?: { desired: DesiredZone; live: LiveZone };
 }
 
 function message(error: unknown): string {
@@ -72,8 +74,8 @@ export async function statusAll(
     const plan = visible.find((z) => z.id === inventory.zone_id)?.plan ?? '';
     const base = { zone: inventory.zone, zoneId: inventory.zone_id, plan };
     try {
-      const { diff } = await checkZone(api, baseline, inventory);
-      push({ ...base, state: diff.state, diff });
+      const { desired, live, diff } = await checkZone(api, baseline, inventory);
+      push({ ...base, state: diff.state, diff, detail: { desired, live } });
     } catch (error) {
       push({ ...base, state: 'error', error: message(error) });
     }

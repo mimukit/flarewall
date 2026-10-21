@@ -1,0 +1,41 @@
+// Starts the TUI: builds the store and the runner, then renders the app on the alternate screen.
+// Only `flarewall tui` loads this module, with a dynamic import, so no other command loads Ink.
+import { render } from 'ink';
+import type { ReactElement } from 'react';
+import type { CloudflareApi } from '../core/api.js';
+import { loadData } from '../node/data.js';
+import { App } from './app.js';
+import { createRunner } from './runner.js';
+import { initialState, type TuiData } from './state.js';
+import { createStore, type Store } from './store.js';
+
+export interface TuiOptions {
+  api: CloudflareApi;
+  dataDir: string;
+  /** Reads the data repo. Default: loadData. */
+  load?: (dataDir: string) => Promise<TuiData>;
+  /** The terminal width at start; the app follows resizes after that. */
+  columns: number;
+  /** A fixed terminal height. Default: the terminal height, followed on resize. */
+  rows?: number;
+  onQuit: () => void;
+}
+
+/** The store and the app element. Tests render the element with ink-testing-library. */
+export function createTui(options: TuiOptions): { store: Store; element: ReactElement } {
+  const store = createStore(
+    initialState({ dataDir: options.dataDir, columns: options.columns, rows: options.rows ?? 24 }),
+    createRunner({ api: options.api, dataDir: options.dataDir, load: options.load ?? loadData, onQuit: options.onQuit }),
+  );
+  return { store, element: <App store={store} {...(options.rows === undefined ? {} : { rows: options.rows })} /> };
+}
+
+/** Runs the TUI until the owner quits, and returns the exit code. */
+export async function startTui(options: { api: CloudflareApi; dataDir: string }): Promise<number> {
+  let quit = () => {};
+  const { element } = createTui({ ...options, columns: process.stdout.columns ?? 80, onQuit: () => quit() });
+  const instance = render(element, { exitOnCtrlC: false, alternateScreen: true });
+  quit = () => instance.unmount();
+  await instance.waitUntilExit();
+  return 0;
+}

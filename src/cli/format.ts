@@ -1,6 +1,6 @@
 // The CLI text: the line formatters and outcome text that the CLI and the TUI both print.
 import type { ApplyResult, RestorePlan, RestoreResult, RuleStep, ZonePlan } from '../core/apply.js';
-import type { Change, ForeignRule } from '../core/diff.js';
+import { changeValues, type Change, type ForeignRule } from '../core/diff.js';
 import type { ZoneReport } from '../core/status.js';
 
 /** Pads each column but the last to its widest cell and joins the cells with two spaces. */
@@ -45,26 +45,50 @@ export function foreignLine(kind: string, r: ForeignRule): string {
   return `${r.phase}: ${kind} ${name}${r.id ? ` (id ${r.id})` : ''}`;
 }
 
+/** One line of a zone's diff, with the section it sits in: a phase, `settings`, or `bot management`. */
+export interface DiffLine {
+  text: string;
+  /** Absent on the zone line. */
+  section?: string;
+}
+
+export interface DiffLineOptions {
+  /** Show the legacy and unowned rules. Default true. */
+  foreign?: boolean;
+  /** Show the live and wanted value of each changed rule field. Default false. */
+  values?: boolean;
+}
+
+function changeSection(c: Change): string {
+  if (c.kind === 'setting') return 'settings';
+  if (c.kind === 'bot_management') return 'bot management';
+  return c.phase;
+}
+
+/** One zone's `diff` output: its state, then its legacy rules, changes, and unowned rules. */
+export function zoneDiffLines(r: ZoneReport, options: DiffLineOptions = {}): DiffLine[] {
+  if (r.state === 'error') return [{ text: `${r.zone}: error: ${r.error ?? ''}` }];
+  if (r.state === 'not managed') return [{ text: `${r.zone}: not managed (no inventory entry; run flarewall add ${r.zone})` }];
+  const lines: DiffLine[] = [{ text: `${r.zone}: ${r.state}` }];
+  const diff = r.diff;
+  if (diff === undefined) return lines;
+  const foreign = options.foreign ?? true;
+  if (foreign) for (const l of diff.legacy) lines.push({ text: `  ${foreignLine('legacy', l)}`, section: l.phase });
+  for (const c of diff.changes) {
+    lines.push({ text: `  ${changeLine(c)}`, section: changeSection(c) });
+    if (options.values === true && c.kind === 'changed' && r.detail !== undefined) {
+      for (const v of changeValues(r.detail.desired, r.detail.live, c)) {
+        lines.push({ text: `    ${v.field}: live ${show(v.live)}; want ${show(v.want)}`, section: c.phase });
+      }
+    }
+  }
+  if (foreign) for (const u of diff.unowned) lines.push({ text: `  ${foreignLine('unowned', u)}`, section: u.phase });
+  return lines;
+}
+
 /** The `diff` output: each zone state, then its legacy rules, changes, and unowned rules. */
 export function diffLines(reports: readonly ZoneReport[]): string[] {
-  const lines: string[] = [];
-  for (const r of reports) {
-    if (r.state === 'error') {
-      lines.push(`${r.zone}: error: ${r.error ?? ''}`);
-      continue;
-    }
-    if (r.state === 'not managed') {
-      lines.push(`${r.zone}: not managed (no inventory entry; run flarewall add ${r.zone})`);
-      continue;
-    }
-    lines.push(`${r.zone}: ${r.state}`);
-    const diff = r.diff;
-    if (diff === undefined) continue;
-    for (const l of diff.legacy) lines.push(`  ${foreignLine('legacy', l)}`);
-    for (const c of diff.changes) lines.push(`  ${changeLine(c)}`);
-    for (const u of diff.unowned) lines.push(`  ${foreignLine('unowned', u)}`);
-  }
-  return lines;
+  return reports.flatMap((r) => zoneDiffLines(r).map((l) => l.text));
 }
 
 /** One planned rule step as a line. */
