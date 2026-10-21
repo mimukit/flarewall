@@ -79,13 +79,13 @@ Done when: a research note in `docs/research/` has one table row per required ca
 
 Status: done on 2026-10-21. The note is `docs/research/0001-research-flarewall-open-questions-2026-10-21.md`, and the picks are in Design decisions.
 
-### Phase 2: baseline format and render (#1)
+### Phase 2: baseline format and render (#1) (built 2026-10-21)
 
 Define the baseline file format and the zone inventory format, both with `version: 1`. Write the default baseline from the current script's rule set. Write a `render` step that takes a baseline and one zone's inventory entry and produces the exact API payloads. Add `flarewall init`, which copies the default baseline into the data repo. Add the strip CI: the private string check and gitleaks. Change the repo `LICENSE` to MIT and add the `files` allowlist to `package.json`.
 
 Done when: a test renders the payloads for a fixture zone with API hosts and WordPress hosts, and the output matches the JSON that `cf-security-setup.sh` builds for the same input, except for the `flarewall_` refs and the geo country parameter. The strip CI passes on the branch.
 
-### Phase 3: status and diff (#1)
+### Phase 3: status and diff (#1) (built 2026-10-21)
 
 Attended: the owner runs the live checks with a read-only token.
 
@@ -93,7 +93,7 @@ Read the live state of each zone in the inventory and compare it with the render
 
 Done when: `flarewall status` on a zone that the current script hardened prints `legacy`, and on a zone with a manual rule edit in the dashboard it prints `drift` and `diff` names the changed rule. `flarewall add` writes an inventory file for a zone with no entry. The owner has published `flarewall@0.1.0` to npm.
 
-### Phase 4: apply (#1)
+### Phase 4: apply (#1) (built 2026-10-21)
 
 Attended: the owner runs every `--write` step. No agent runs one.
 
