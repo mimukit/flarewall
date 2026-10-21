@@ -45,6 +45,21 @@ class GatedApi extends FakeCloudflareApi {
   }
 }
 
+/** A fake client whose listZones waits until release(), so a test can see the screen while the zones load. */
+class SlowListApi extends FakeCloudflareApi {
+  private open!: () => void;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.open = resolve;
+  });
+  release(): void {
+    this.open();
+  }
+  override async listZones() {
+    await this.gate;
+    return super.listZones();
+  }
+}
+
 let dir: string;
 
 function writeInventory(name: string, text: string) {
@@ -183,6 +198,17 @@ describe('TUI frames', () => {
     expect(rowLine(frame, 'example.net')).toMatch(/loading\s+-\s+-\s+2\s+XX\s+www/);
     api.release();
     await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.net')).toMatch(/\sin sync\s/));
+  });
+
+  it('shows a spinner and the load step in the empty list while the zones load', async () => {
+    const api = new SlowListApi();
+    seed(api);
+    rmSync(join(dir, 'inventory'), { recursive: true, force: true });
+    const screen = start(api);
+    await vi.waitFor(() => expect(screen.frame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Listing the zones the token can see on Cloudflare/));
+    api.release();
+    await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.net')).toBeDefined());
+    expect(screen.frame()).not.toContain('Listing the zones');
   });
 
   it("after j, the diff pane shows the second zone's diffLines", async () => {

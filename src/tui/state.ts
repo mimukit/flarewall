@@ -13,7 +13,7 @@ export type Focus = 'zones' | 'diff';
 
 /**
  * The input mode: `confirm` is the y/N prompt of one write zone, `running` means API calls are in
- * flight. The help overlay is the separate `help` flag, so it can open over any mode.
+ * flight (a dry run, a write, or an add). The help overlay is the separate `help` flag, so it can open over any mode.
  */
 export type Mode = { kind: 'normal' } | { kind: 'filter' } | { kind: 'confirm'; zone: string } | { kind: 'running' };
 
@@ -80,6 +80,8 @@ export interface TuiState {
   showValues: boolean;
   /** The first keys of a sequence such as `gg`. */
   pending: string;
+  /** The step of a full load in flight: reading the data repo, or listing the zones. Absent when neither runs. */
+  loading?: 'data' | 'zones';
   /** A load or parse error for the header, as `<file>: <error>`. */
   error?: string;
   /** Marked zone names. A mark stays when a filter hides its zone. */
@@ -88,6 +90,8 @@ export interface TuiState {
   run?: RunState;
   /** The dry run or write text per zone. It shows in the diff pane until the next `r` or `R`. */
   runLines: Record<string, string[]>;
+  /** The add in flight: the zones it writes an inventory entry for, and the result lines so far. */
+  adding?: { zones: string[]; lines: Record<string, string[]> };
   /** True once a write in this session failed; the TUI then exits 2. */
   writeFailed: boolean;
 }
@@ -95,12 +99,14 @@ export interface TuiState {
 /**
  * Requests the runner carries out. `gen` ties the answers to the load that asked for them.
  * `apply-zone` runs applyInventoryZone on one zone; `confirm-answer` answers its y/N prompt.
+ * `add-zones` writes an inventory entry for each zone, one after another, as `flarewall add` does.
  */
 export type Effect =
   | { kind: 'load'; gen: number }
   | { kind: 'refresh-zone'; gen: number; zone: string; data: TuiData }
   | { kind: 'apply-zone'; zone: string; write: boolean; data: TuiData }
   | { kind: 'confirm-answer'; yes: boolean }
+  | { kind: 'add-zones'; zones: string[] }
   | { kind: 'quit' };
 
 export type TuiEvent =
@@ -117,7 +123,11 @@ export type TuiEvent =
   | { type: 'confirm-asked'; zone: string }
   | { type: 'backup-written'; zone: string; path: string }
   | { type: 'zone-done'; zone: string; outcome: ApplyResult['outcome'] }
-  | { type: 'zone-failed'; zone: string; error: string };
+  | { type: 'zone-failed'; zone: string; error: string }
+  /** The answers of an `add-zones` effect: one per zone, then `adds-done`. */
+  | { type: 'zone-added'; zone: string; path: string }
+  | { type: 'add-failed'; zone: string; error: string }
+  | { type: 'adds-done' };
 
 export interface Update {
   state: TuiState;
@@ -343,10 +353,23 @@ export function zoneCard(row: Row): PaneLine[] {
   return lines.length === 0 ? [] : [...lines, { text: '' }];
 }
 
+/**
+ * The text in an empty zone list: what the load is doing, or why no row shows. Undefined when a
+ * row shows. `busy` is true while a load step runs, so the screen draws a spinner before the text.
+ */
+export function listNotice(state: TuiState): { text: string; busy: boolean } | undefined {
+  if (visibleRows(state).length > 0) return undefined;
+  if (state.loading === 'data') return { text: `Reading the data repo at ${state.dataDir}`, busy: true };
+  if (state.loading === 'zones') return { text: 'Listing the zones the token can see on Cloudflare', busy: true };
+  if (state.zones.length > 0) return { text: 'No zone matches the search or the state filter.', busy: false };
+  if (state.error !== undefined) return { text: 'No zone loaded. Fix the error above, then press R.', busy: false };
+  return { text: 'The token sees no zone.', busy: false };
+}
+
 /** The diff pane title: the zone, and `plan (i of n)` while the zone has run text. */
 export function diffPaneTitle(state: TuiState): string {
   const row = selectedRow(state);
-  if (row === undefined) return 'No zone';
+  if (row === undefined) return state.loading === undefined ? 'No zone' : 'Loading';
   if (state.runLines[row.zone] === undefined) return row.zone;
   const run = state.run;
   const at = run === undefined ? -1 : run.zones.indexOf(row.zone);
@@ -376,9 +399,9 @@ export function diffPaneLines(state: TuiState): PaneLine[] {
 
 /** The diff pane of a `not managed` zone: the next step, and the empty state when no zone is managed. */
 function notManagedLines(state: TuiState, zone: string): DiffLine[] {
-  const lines = ['No inventory entry for this zone.', `Run flarewall add ${zone} to manage it.`];
+  const lines = ['No inventory entry for this zone.', `Press + to add it, as flarewall add ${zone} does.`];
   if (state.zones.every((r) => r.inventory === undefined)) {
-    lines.push('', `No zone has an inventory entry: 0 of ${state.zones.length} zones are managed.`, 'Run flarewall add <zone> for each zone you want to manage, then press R.');
+    lines.push('', `No zone has an inventory entry: 0 of ${state.zones.length} zones are managed.`, 'Mark the zones you want to manage with space, then press +.');
   }
   return lines.map((text) => ({ text }));
 }
@@ -489,7 +512,7 @@ function refreshSelected(state: TuiState): Update {
 
 function load(state: TuiState): Update {
   const gen = state.gen + 1;
-  return { state: { ...withoutRunLines(state), gen }, effects: [{ kind: 'load', gen }] };
+  return { state: { ...withoutRunLines(state), gen, loading: 'data' }, effects: [{ kind: 'load', gen }] };
 }
 
 // ---- Dry run and write ----
@@ -518,9 +541,48 @@ export function canRun(state: TuiState): boolean {
 
 /** Why a zone is skipped: no inventory entry, or an error state. Undefined when it can run. */
 function skipLine(row: Row | undefined, zone: string): string | undefined {
-  if (row?.inventory === undefined || row.report?.state === 'not managed') return `${zone}: skipped, not managed; run flarewall add ${zone}`;
+  if (row?.inventory === undefined || row.report?.state === 'not managed') return `${zone}: skipped, not managed; press + to add it`;
   if (row.report?.state === 'error') return `${zone}: skipped: ${row.report.error ?? ''}`;
   return undefined;
+}
+
+// ---- Add ----
+
+function isUnmanaged(row: Row | undefined): boolean {
+  return row !== undefined && (row.inventory === undefined || row.report?.state === 'not managed');
+}
+
+/** The zones `+` adds: the run targets with no inventory entry. */
+function addTargets(state: TuiState): string[] {
+  return runTargets(state).filter((zone) => isUnmanaged(state.zones.find((r) => r.zone === zone)));
+}
+
+/** True when `+` has at least one zone to add; the hint line dims the key when not. */
+export function canAdd(state: TuiState): boolean {
+  return addTargets(state).length > 0;
+}
+
+function startAdd(state: TuiState): Update {
+  if (state.mode.kind !== 'normal') return none(state);
+  const zones = addTargets(state);
+  if (zones.length === 0) return none(state);
+  const focus = isNarrow(state) ? 'diff' : state.focus;
+  return { state: { ...state, focus, mode: { kind: 'running' }, adding: { zones, lines: {} } }, effects: [{ kind: 'add-zones', zones }] };
+}
+
+function onAdded(state: TuiState, zone: string, line: string): TuiState {
+  const adding = state.adding;
+  if (adding === undefined || !adding.zones.includes(zone)) return state;
+  return setLines({ ...state, adding: { ...adding, lines: { ...adding.lines, [zone]: [line] } } }, zone, [line]);
+}
+
+/** Every add ended: reload, so the new entries show as managed zones, and keep each zone's result line. */
+function onAddsDone(state: TuiState): Update {
+  const adding = state.adding;
+  if (adding === undefined) return none(state);
+  const { adding: _done, ...rest } = state;
+  const reloaded = load({ ...rest, mode: { kind: 'normal' } });
+  return { state: { ...reloaded.state, runLines: adding.lines }, effects: reloaded.effects };
 }
 
 function setLines(state: TuiState, zone: string, lines: string[]): TuiState {
@@ -604,6 +666,8 @@ function act(state: TuiState, action: Action): Update {
     case 'cancel':
       if (state.help) return none({ ...state, help: false });
       if (state.run !== undefined) return none({ ...state, run: { ...state.run, stop: true } });
+      // An add is one file per zone and ends at once; esc does not stop it.
+      if (state.adding !== undefined) return none(state);
       return none({ ...state, mode: { kind: 'normal' } });
     case 'down':
       return none(diff ? scrollTo(state, state.diffScroll + 1) : selectIndex(state, selectedIndex(state) + 1));
@@ -668,6 +732,8 @@ function act(state: TuiState, action: Action): Update {
       return none(markAll(state));
     case 'clear-marks':
       return none({ ...state, marks: [] });
+    case 'add':
+      return startAdd(state);
     case 'dry-run':
       return startRun(state, false);
     case 'apply':
@@ -727,6 +793,11 @@ function onReport(state: TuiState, report: ZoneReport): TuiState {
   return settle(report.zone === state.selected ? scrollTo(next, state.diffScroll) : next);
 }
 
+function withoutLoading(state: TuiState): TuiState {
+  const { loading: _done, ...rest } = state;
+  return rest;
+}
+
 export function update(state: TuiState, event: TuiEvent): Update {
   switch (event.type) {
     case 'start':
@@ -738,14 +809,14 @@ export function update(state: TuiState, event: TuiEvent): Update {
     case 'data-loaded': {
       if (event.gen !== state.gen) return none(state);
       const { error: _drop, ...rest } = state;
-      return none(settle({ ...rest, data: event.data, zones: rowsFromData(state, event.data) }));
+      return none(settle({ ...rest, loading: 'zones', data: event.data, zones: rowsFromData(state, event.data) }));
     }
     case 'zones-listed':
-      return none(event.gen === state.gen ? onZonesListed(state, event.zones) : state);
+      return none(event.gen === state.gen ? onZonesListed(withoutLoading(state), event.zones) : state);
     case 'report':
       return none(event.gen === state.gen ? onReport(state, event.report) : state);
     case 'load-failed':
-      return none(event.gen === state.gen ? { ...state, error: event.error } : state);
+      return none(event.gen === state.gen ? { ...withoutLoading(state), error: event.error } : state);
     case 'plan-ready': {
       const lines = planLines(event.plan);
       return none(state.run === undefined ? state : setLines(state, event.zone, lines));
@@ -758,5 +829,11 @@ export function update(state: TuiState, event: TuiEvent): Update {
     case 'zone-done':
     case 'zone-failed':
       return onZoneEnd(state, event);
+    case 'zone-added':
+      return none(onAdded(state, event.zone, `${event.zone}: wrote ${event.path}; put each host in hosts.api or hosts.wordpress, then press R`));
+    case 'add-failed':
+      return none(onAdded(state, event.zone, `${event.zone}: error: ${event.error}`));
+    case 'adds-done':
+      return onAddsDone(state);
   }
 }

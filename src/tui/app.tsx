@@ -1,11 +1,12 @@
 // The Ink screen, layout A: header, zone list, diff pane, and the mode chip with key hints.
 // Components render the state and send key events. No Cloudflare call and no rule logic here.
 import { Box, Text, useInput, useWindowSize, type Key } from 'ink';
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { hintBindings, KEYMAP, SCOPE_TITLES, type Scope } from './keymap.js';
 import {
   bodyHeight,
   CARD_LABEL_WIDTH,
+  canAdd,
   canRun,
   columnWidths,
   confirmPrompt,
@@ -15,6 +16,7 @@ import {
   isNarrow,
   listHeaders,
   listHeight,
+  listNotice,
   listWidth,
   markSummary,
   NUMBER_COLUMNS,
@@ -56,6 +58,36 @@ function oneLine(text: string): string {
     .join(' ');
 }
 
+const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/** The spinner frame. It turns every 80 ms while `active`, and stops its timer when not. */
+function useSpinner(active: boolean): string {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER.length), 80);
+    return () => clearInterval(timer);
+  }, [active]);
+  return SPINNER[frame] as string;
+}
+
+/** The text in an empty zone list, after one blank line: a spinner and the load step, or why no row shows. */
+function ListNotice({ state }: { state: TuiState }) {
+  const notice = listNotice(state);
+  const spinner = useSpinner(notice?.busy === true);
+  if (notice === undefined) return null;
+  return (
+    <>
+      <Text> </Text>
+      <Text wrap="truncate-end" color={THEME.muted}>
+        {'  '}
+        {notice.busy ? <Text color={THEME.primary}>{`${spinner} `}</Text> : null}
+        {notice.text}
+      </Text>
+    </>
+  );
+}
+
 /** A state word with its mark, in the state colour. */
 function StateText({ word, width }: { word: string; width?: number }) {
   const label = stateLabel(word);
@@ -69,7 +101,7 @@ function StateText({ word, width }: { word: string; width?: number }) {
  * The focused pane has an accent border and a bold title; the other pane has a grey border.
  */
 function Pane({ title, word, footer, width, height, focused, children }: { title: string; word?: string; footer?: string; width: number; height: number; focused: boolean; children: ReactNode }) {
-  const color = focused ? THEME.activeBorder : THEME.inactiveBorder;
+  const color = focused ? THEME.primary : THEME.inactiveBorder;
   const label = word === undefined ? title : `${title} ${stateLabel(word)}`;
   const dashes = Math.max(0, width - label.length - 4);
   const tail = footer === undefined ? '' : ` ${footer} ─`;
@@ -80,7 +112,7 @@ function Pane({ title, word, footer, width, height, focused, children }: { title
       ) : (
         <Text wrap="truncate-end">
           <Text color={color}>╭ </Text>
-          <Text bold={focused} color={focused ? THEME.activeBorder : THEME.inactiveTitle}>
+          <Text bold={focused} color={focused ? THEME.primary : THEME.inactiveTitle}>
             {title}
           </Text>
           {word === undefined ? null : (
@@ -160,7 +192,7 @@ function Summary({ state }: { state: TuiState }) {
     <Text wrap="truncate-end" color={THEME.hint}>
       {isNarrow(state) && !state.help ? (
         <>
-          <Text color={THEME.activeBorder}>{state.focus === 'zones' ? '1/2' : '2/2'}</Text>
+          <Text color={THEME.primary}>{state.focus === 'zones' ? '1/2' : '2/2'}</Text>
           {bar}
         </>
       ) : null}
@@ -194,13 +226,14 @@ function ZonesPane({ state, width }: { state: TuiState; width: number }) {
         {'  '}
         {cells(listHeaders(state)).join('  ').trimEnd()}
       </Text>
+      <ListNotice state={state} />
       {rows.map((row) => {
         const [zone, plan, word, ...rest] = cells(rowCells(row));
         const selected = row.zone === state.selected;
         return (
           // The selection is a surface bar over the whole row, so the eye follows it across the columns.
           <Text key={row.zone} wrap="truncate-end" color={THEME.text} bold={selected} {...(selected ? { backgroundColor: THEME.selection } : {})}>
-            <Text color={THEME.activeBorder}>{selected ? '>' : ' '}</Text>
+            <Text color={THEME.primary}>{selected ? '>' : ' '}</Text>
             <Text color={THEME.mark}>{state.marks.includes(row.zone) ? '●' : ' '}</Text>
             {zone}
             {'  '}
@@ -263,8 +296,9 @@ function HelpPane({ state }: { state: TuiState }) {
 /** The key hints of the current mode. In CONFIRM, the y/N prompt leads the line in bold red. */
 function HintLine({ state }: { state: TuiState }) {
   const ask = state.mode.kind === 'confirm' && !state.help ? confirmPrompt(state.mode.zone) : undefined;
-  // `d` and `a` stay in the line, as the mode's keys, but dim when every target zone would be skipped.
+  // `+`, `d`, and `a` stay in the line, as the mode's keys, but dim when they have no zone to act on.
   const idle = !canRun(state);
+  const addIdle = !canAdd(state);
   return (
     <Text wrap="truncate-end">
       {ask === undefined ? null : (
@@ -277,7 +311,7 @@ function HintLine({ state }: { state: TuiState }) {
         const hint = b.hint as string;
         const space = hint.indexOf(' ');
         const keys = b.keys.length === 0 || space === -1 ? '' : hint.slice(0, space);
-        const dim = idle && (b.action === 'dry-run' || b.action === 'apply');
+        const dim = (idle && (b.action === 'dry-run' || b.action === 'apply')) || (addIdle && b.action === 'add');
         return (
           <Text key={`${b.scope} ${b.action}`} color={dim ? THEME.idle : THEME.hint}>
             {i === 0 ? '' : '  '}

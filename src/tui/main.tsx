@@ -4,7 +4,7 @@ import { render } from 'ink';
 import type { ReactElement } from 'react';
 import type { CloudflareApi } from '../core/api.js';
 import { createBackupWriter } from '../node/backup.js';
-import { loadData } from '../node/data.js';
+import { addZone, loadData } from '../node/data.js';
 import { App } from './app.js';
 import { createRunner } from './runner.js';
 import { initialState, tuiExitCode, type TuiData } from './state.js';
@@ -33,6 +33,7 @@ export function createTui(options: TuiOptions): { store: Store; element: ReactEl
       dataDir: options.dataDir,
       load: options.load ?? loadData,
       backup: createBackupWriter(options.dataDir, options.now),
+      add: (zone) => addZone(options.api, options.dataDir, zone),
       onQuit: options.onQuit,
     }),
   );

@@ -138,6 +138,28 @@ afterEach(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
 
+describe('TUI add', () => {
+  it('+ writes the inventory entry of a not managed zone, then reloads it as a managed zone', async () => {
+    const dir = dataDir();
+    const api = new FakeCloudflareApi();
+    seed(api, dir);
+    api.addZone({
+      summary: { id: '2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f', name: 'example.edu', accountId: ACCOUNT, plan: PLAN },
+      dns: [{ type: 'A', name: 'www.example.edu', content: '192.0.2.10', proxied: true }],
+    });
+    const screen = await loadedScreen(api, dir);
+    await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.edu')).toMatch(/not managed/));
+    // The list sorts by name: example.com, then example.edu.
+    await keys(screen, 'g', 'g', 'j');
+    expect(flat(screen.frame())).toContain('Press + to add it');
+    await keys(screen, '+');
+    const path = join(dir, 'inventory', ACCOUNT, 'example.edu.yaml');
+    await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.edu')).not.toMatch(/not managed|loading/));
+    expect(readFileSync(path, 'utf8')).toContain('#   www.example.edu');
+    expect(flat(diffColumn(screen.frame()))).toContain(`example.edu: wrote ${path}`);
+  });
+});
+
 describe('TUI dry run and write', () => {
   it('d sends no write call and the diff pane shows the planLines text', async () => {
     const dir = dataDir();

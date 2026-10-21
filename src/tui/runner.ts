@@ -1,5 +1,6 @@
 // Runs the reducer's effects: reads the data repo and the live zones through the core, applies
-// zones through applyInventoryZone, and sends the answers back as data events. It holds no rule
+// zones through applyInventoryZone, adds zones as `flarewall add` does, and sends the answers back
+// as data events. It holds no rule
 // logic; statusAll and applyZone decide every state and every write.
 import type { CloudflareApi } from '../core/api.js';
 import { applyInventoryZone, type BackupWriter } from '../core/apply.js';
@@ -14,6 +15,8 @@ export interface RunnerDeps {
   load: (dataDir: string) => Promise<TuiData>;
   /** Stores the backup before a write: the same writer as `flarewall apply --write`. */
   backup: BackupWriter;
+  /** Writes the inventory entry for a zone and returns its path: the same step as `flarewall add`. */
+  add: (zone: string) => Promise<string>;
   /** Called on the quit effect. */
   onQuit: () => void;
 }
@@ -88,6 +91,19 @@ export function createRunner(deps: RunnerDeps): EffectRunner {
           (result) => dispatch({ type: 'zone-done', zone, outcome: result.outcome }),
           (error: unknown) => dispatch({ type: 'zone-failed', zone, error: message(error) }),
         );
+        return;
+      }
+      case 'add-zones': {
+        void (async () => {
+          for (const zone of effect.zones) {
+            try {
+              dispatch({ type: 'zone-added', zone, path: await deps.add(zone) });
+            } catch (error) {
+              dispatch({ type: 'add-failed', zone, error: message(error) });
+            }
+          }
+          dispatch({ type: 'adds-done' });
+        })();
         return;
       }
       case 'confirm-answer': {

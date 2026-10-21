@@ -36,8 +36,8 @@ export const MOCHA = {
 export const THEME = {
   /** Plain text. */
   text: MOCHA.text,
-  /** The border and the title of the focused pane, and the Search bar in FILTER mode. */
-  activeBorder: MOCHA.blue,
+  /** The primary colour: the border and the title of the focused pane, the pane counter, the row cursor, and the Search bar in FILTER mode. */
+  primary: MOCHA.green,
   /** The border of every other pane. */
   inactiveBorder: MOCHA.overlay0,
   /** The title of a pane without focus. */

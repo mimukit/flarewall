@@ -7,7 +7,7 @@ import type { ZoneReport } from '../src/core/status.js';
 import { KEYMAP } from '../src/tui/keymap.js';
 import { applyOutcomeText, planLines } from '../src/cli/format.js';
 import type { ZonePlan } from '../src/core/apply.js';
-import { canRun, diffPaneLines, diffPaneTitle, headerCounts, initialState, markSummary, planLabel, listWidth, rowCells, stateLabel, update, visibleRows, zoneCard, zonesPaneWidth, type Effect, type TuiData, type TuiEvent, type TuiState } from '../src/tui/state.js';
+import { canAdd, canRun, diffPaneLines, diffPaneTitle, listNotice, headerCounts, initialState, markSummary, planLabel, listWidth, rowCells, stateLabel, update, visibleRows, zoneCard, zonesPaneWidth, type Effect, type TuiData, type TuiEvent, type TuiState } from '../src/tui/state.js';
 import { defaultBaseline } from './helpers.js';
 
 const CUSTOM: Phase = 'http_request_firewall_custom';
@@ -440,7 +440,7 @@ describe('TUI reducer, d dry run', () => {
     expect(done.effects).toEqual([]);
     expect(done.state.mode).toEqual({ kind: 'normal' });
     expect(paneText(select(done.state, 'd.example.net'))).toEqual(['d.example.net: skipped: getPhase failed: 403']);
-    expect(paneText(select(done.state, 'e.example.com'))).toEqual(['e.example.com: skipped, not managed; run flarewall add e.example.com']);
+    expect(paneText(select(done.state, 'e.example.com'))).toEqual(['e.example.com: skipped, not managed; press + to add it']);
   });
 
   it('d in the diff pane runs the selected zone only, even with marks', () => {
@@ -612,10 +612,54 @@ describe('TUI reducer, RUNNING', () => {
   });
 });
 
+describe('TUI reducer, + add', () => {
+  it('+ adds the selected not managed zone and enters RUNNING', () => {
+    const { state, effects } = press(select(loaded(), 'e.example.com'), '+');
+    expect(effects).toEqual([{ kind: 'add-zones', zones: ['e.example.com'] }]);
+    expect(state.mode).toEqual({ kind: 'running' });
+  });
+
+  it('+ adds only the not managed zones among the marks', () => {
+    const s = marked(['e.example.com', 'b.example.net']);
+    expect(press(s, '+').effects).toEqual([{ kind: 'add-zones', zones: ['e.example.com'] }]);
+  });
+
+  it('+ does nothing on a managed zone, and canAdd is false there', () => {
+    const s = select(loaded(), 'b.example.net');
+    expect(canAdd(s)).toBe(false);
+    expect(canAdd(select(loaded(), 'e.example.com'))).toBe(true);
+    const r = press(s, '+');
+    expect(r.effects).toEqual([]);
+    expect(r.state.mode).toEqual({ kind: 'normal' });
+  });
+
+  it('after the add, the TUI reloads and keeps the result line of each zone', () => {
+    const s = press(select(loaded(), 'e.example.com'), '+').state;
+    const r = run(s, [{ type: 'zone-added', zone: 'e.example.com', path: '/data/inventory/x/e.example.com.yaml' }, { type: 'adds-done' }]);
+    expect(r.effects).toEqual([{ kind: 'load', gen: s.gen + 1 }]);
+    expect(r.state.mode).toEqual({ kind: 'normal' });
+    expect(r.state.adding).toBeUndefined();
+    expect(paneText(r.state)).toEqual(['e.example.com: wrote /data/inventory/x/e.example.com.yaml; put each host in hosts.api or hosts.wordpress, then press R']);
+  });
+
+  it('a failed add shows its error', () => {
+    const s = press(select(loaded(), 'e.example.com'), '+').state;
+    const r = run(s, [{ type: 'add-failed', zone: 'e.example.com', error: 'zone e.example.com not found: the token cannot see it' }, { type: 'adds-done' }]);
+    expect(paneText(r.state)).toEqual(['e.example.com: error: zone e.example.com not found: the token cannot see it']);
+  });
+
+  it('esc does not stop an add, and d, a, r, and R wait for it', () => {
+    const s = press(select(loaded(), 'e.example.com'), '+').state;
+    const r = press(s, 'esc', 'd', 'a', 'r', 'R', '+');
+    expect(r.effects).toEqual([]);
+    expect(r.state.mode).toEqual({ kind: 'running' });
+  });
+});
+
 describe('TUI key map, Phase 3', () => {
   it('names every Phase 3 key in the help table', () => {
     const keys = new Set(KEYMAP.flatMap((b) => b.keys.map((k) => `${b.scope} ${k}`)));
-    for (const k of ['zones space', 'zones ctrl-a', 'zones ctrl-x', 'zones d', 'zones a', 'diff d', 'diff a', 'confirm y', 'confirm n', 'confirm enter', 'confirm esc', 'running j', 'running k']) {
+    for (const k of ['zones space', 'zones ctrl-a', 'zones ctrl-x', 'zones d', 'zones a', 'zones +', 'diff +', 'diff d', 'diff a', 'confirm y', 'confirm n', 'confirm enter', 'confirm esc', 'running j', 'running k']) {
       expect(keys).toContain(k);
     }
   });
@@ -628,6 +672,22 @@ function body(state: TuiState): string[] {
 }
 
 describe('TUI screen helpers', () => {
+  it('listNotice names the load step while the list is empty, then why no row shows', () => {
+    const empty = { baseline: defaultBaseline(), inventories: [] };
+    const start = run(initialState({ dataDir: '/data', columns: 200, rows: 30 }), [{ type: 'start' }]).state;
+    expect(listNotice(start)).toEqual({ text: 'Reading the data repo at /data', busy: true });
+    expect(diffPaneTitle(start)).toBe('Loading');
+    const read = run(start, [{ type: 'data-loaded', gen: start.gen, data: empty }]).state;
+    expect(listNotice(read)).toEqual({ text: 'Listing the zones the token can see on Cloudflare', busy: true });
+    const listed = run(read, [{ type: 'zones-listed', gen: start.gen, zones: [] }]).state;
+    expect(listNotice(listed)).toEqual({ text: 'The token sees no zone.', busy: false });
+    expect(diffPaneTitle(listed)).toBe('No zone');
+    const failed = run(start, [{ type: 'load-failed', gen: start.gen, error: '/data/baseline.yaml: bad' }]).state;
+    expect(listNotice(failed)).toEqual({ text: 'No zone loaded. Fix the error above, then press R.', busy: false });
+    expect(listNotice(loaded())).toBeUndefined();
+    expect(listNotice(type(loaded(), '/zzz').state)).toEqual({ text: 'No zone matches the search or the state filter.', busy: false });
+  });
+
   it('gives the zones pane 75% of the window, keeps the diff pane at 50 columns or more, and never cuts the list', () => {
     expect(zonesPaneWidth(loaded({ columns: 400 }))).toBe(300);
     expect(zonesPaneWidth(loaded({ columns: 160 }))).toBe(110);
@@ -679,7 +739,7 @@ describe('TUI screen helpers', () => {
   });
 
   it('shows the next step for a not managed zone', () => {
-    expect(body(select(loaded(), 'e.example.com'))).toEqual(['No inventory entry for this zone.', 'Run flarewall add e.example.com to manage it.']);
+    expect(body(select(loaded(), 'e.example.com'))).toEqual(['No inventory entry for this zone.', 'Press + to add it, as flarewall add e.example.com does.']);
   });
 
   it('shows the empty state when no zone has an inventory entry', () => {
@@ -688,10 +748,10 @@ describe('TUI screen helpers', () => {
     expect(headerCounts(none)).toContainEqual({ word: 'not managed', count: 5 });
     expect(body(none)).toEqual([
       'No inventory entry for this zone.',
-      'Run flarewall add a.example.com to manage it.',
+      'Press + to add it, as flarewall add a.example.com does.',
       '',
       'No zone has an inventory entry: 0 of 5 zones are managed.',
-      'Run flarewall add <zone> for each zone you want to manage, then press R.',
+      'Mark the zones you want to manage with space, then press +.',
     ]);
   });
 

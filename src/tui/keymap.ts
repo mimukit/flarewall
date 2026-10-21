@@ -38,6 +38,7 @@ export type Action =
   | 'mark'
   | 'mark-all'
   | 'clear-marks'
+  | 'add'
   | 'dry-run'
   | 'apply'
   | 'confirm-yes'
@@ -90,6 +91,7 @@ export const KEYMAP: readonly Binding[] = [
   { scope: 'zones', keys: ['space'], action: 'mark', help: 'Mark or unmark the selected zone', hint: 'space mark' },
   { scope: 'zones', keys: ['ctrl-a'], action: 'mark-all', help: 'Mark all visible zones' },
   { scope: 'zones', keys: ['ctrl-x'], action: 'clear-marks', help: 'Clear every mark' },
+  { scope: 'zones', keys: ['+'], action: 'add', help: 'Write an inventory entry for each marked not managed zone, or the selected one, as flarewall add does, then reload', hint: '+ add' },
   { scope: 'zones', keys: ['d'], action: 'dry-run', help: 'Dry run on the marked zones, or the selected zone. The plan shows in the diff pane', hint: 'd dry run' },
   { scope: 'zones', keys: ['a'], action: 'apply', help: 'Write on the marked zones, or the selected zone. Opens CONFIRM once per zone', hint: 'a apply' },
   { scope: 'zones', keys: ['r'], action: 'refresh', help: 'Refresh the selected zone', hint: 'r refresh' },
@@ -107,6 +109,7 @@ export const KEYMAP: readonly Binding[] = [
   { scope: 'diff', keys: ['z'], action: 'toggle-foreign', help: 'Show or hide the unowned and legacy rules', hint: 'z unowned' },
   { scope: 'diff', keys: ['e'], action: 'toggle-values', help: 'Show or hide the live and wanted values of each changed field', hint: 'e values' },
   { scope: 'diff', keys: ['h', 'shift-tab', 'esc', 'tab'], action: 'focus-zones', help: 'Focus the zones pane', hint: 'h zones' },
+  { scope: 'diff', keys: ['+'], action: 'add', help: 'Write an inventory entry for the selected zone when it is not managed, then reload', hint: '+ add' },
   { scope: 'diff', keys: ['d'], action: 'dry-run', help: 'Dry run on the selected zone', hint: 'd dry run' },
   { scope: 'diff', keys: ['a'], action: 'apply', help: 'Write on the selected zone. Opens CONFIRM', hint: 'a apply' },
   { scope: 'diff', keys: ['r'], action: 'refresh', help: 'Refresh the selected zone', hint: 'r refresh' },
@@ -122,7 +125,7 @@ export const KEYMAP: readonly Binding[] = [
   { scope: 'confirm', keys: ['n', 'enter'], action: 'confirm-no', help: 'Skip this zone. The default is no', hint: 'n skip this zone' },
   { scope: 'confirm', keys: ['esc'], action: 'confirm-stop', help: 'Stop the run and skip the remaining zones', hint: 'esc stop, skip the rest' },
 
-  { scope: 'running', keys: ['j', 'down'], action: 'down', help: 'Select the next zone; d, a, r, and R wait until the run ends', hint: 'j/k move' },
+  { scope: 'running', keys: ['j', 'down'], action: 'down', help: 'Select the next zone; +, d, a, r, and R wait until the run ends', hint: 'j/k move' },
   { scope: 'running', keys: ['k', 'up'], action: 'up', help: 'Select the previous zone' },
   { scope: 'running', keys: ['esc'], action: 'cancel', help: 'Skip the remaining zones after the current one', hint: 'esc stop after this zone' },
 ];
