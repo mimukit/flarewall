@@ -14,7 +14,7 @@ import { DEFAULT_BASELINE_FILE, defaultBaseline, legacyCase, readFixture } from 
 const ACCOUNT = '01a7362d577a6c3019a474fd6f485823';
 const IDS = {
   com: '023e105f4ecef8ad9ca31a8372d0c353',
-  net: '9a7806061c88ada191ed06f989cc3dac',
+  net: '0123456789abcdef0123456789abcdef',
   org: '1b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e',
 };
 const CUSTOM: Phase = 'http_request_firewall_custom';
