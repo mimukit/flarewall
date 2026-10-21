@@ -1,0 +1,12 @@
+version: 1
+zone: example.com
+zone_id: "023e105f4ecef8ad9ca31a8372d0c353"
+hosts:
+  api: [api.example.com]
+  wordpress: [blog.example.com]
+geo:
+  enabled: true
+  country: XX
+redirects: root
+rate_limit:
+  requests: 300

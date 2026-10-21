@@ -1,0 +1,17 @@
+[
+  {
+    "action": "block",
+    "description": "Block non-standard ports",
+    "expression": "(cf.edge.server_port ne 443 and cf.edge.server_port ne 80)"
+  },
+  {
+    "action": "block",
+    "description": "Block scanner probes",
+    "expression": "(http.user_agent eq \"\") or (lower(http.request.uri.path) contains \".env\") or (lower(http.request.uri.path) contains \"/.git\") or (lower(http.request.uri.path) contains \"/.aws/\") or (lower(http.request.uri.path) contains \"/.svn\") or (lower(http.request.uri.path) contains \"/.ds_store\") or (lower(http.request.uri.path) contains \"/.vscode\") or (lower(http.request.uri.path) contains \"%25\") or (lower(http.request.uri.path) contains \"phpinfo\") or (lower(http.request.uri.path) contains \"wp-config.php\") or (lower(http.request.uri.path) contains \"/phpmyadmin\") or (lower(http.request.uri.path) contains \"/actuator\") or (lower(http.request.uri.path) contains \"/server-status\") or (lower(http.request.uri.path) contains \"laravel-filemanager\") or (ends_with(lower(http.request.uri.path), \".ini\")) or (ends_with(lower(http.request.uri.path), \".sql\")) or (ends_with(lower(http.request.uri.path), \".bak\")) or (ends_with(lower(http.request.uri.path), \".sh\")) or (ends_with(lower(http.request.uri.path), \".cgi\")) or (ends_with(lower(http.request.uri.path), \".jsp\")) or (ends_with(lower(http.request.uri.path), \".yml\")) or (ends_with(lower(http.request.uri.path), \".yaml\")) or (ends_with(lower(http.request.uri.path), \".tar.gz\")) or (ends_with(lower(http.request.uri.path), \".tgz\")) or (ends_with(lower(http.request.uri.path), \"/xmlrpc.php\")) or (starts_with(lower(http.request.uri.path), \"/vendor/\")) or (starts_with(lower(http.request.uri.path), \"/cgi-bin/\")) or (starts_with(lower(http.request.uri.path), \"/venv/\")) or ((ends_with(lower(http.request.uri.path), \".php\") or starts_with(lower(http.request.uri.path), \"/wp-\")))"
+  },
+  {
+    "action": "managed_challenge",
+    "description": "Hosting networks (verified bots, API hosts, origins allowed)",
+    "expression": "(ip.src.asnum in {8075 16509 14618 396982 31898 14061 24940 16276 63949 20473 132203 45090 37963 45102 48090} and not cf.client.bot and not starts_with(http.request.uri.path, \"/.well-known/acme-challenge/\"))"
+  }
+]

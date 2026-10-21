@@ -1,0 +1,34 @@
+{
+  "name": "flarewall",
+  "version": "0.1.0",
+  "description": "Keep a set of Cloudflare zones on one security baseline.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Mukitul Islam Mukit",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "flarewall": "dist/cli/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-baseline.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check:private": "node scripts/check-private-strings.mjs"
+  },
+  "packageManager": "pnpm@12.14.0",
+  "dependencies": {
+    "cloudflare": "7.3.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

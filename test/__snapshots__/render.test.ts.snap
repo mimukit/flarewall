@@ -1,0 +1,185 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`render snapshots > full render output: api-wordpress-geo-root 1`] = `
+{
+  "phases": {
+    "http_ratelimit": [
+      {
+        "action": "block",
+        "description": "flarewall: rate limit per IP and data center",
+        "enabled": true,
+        "expression": "(starts_with(http.request.uri.path, "/"))",
+        "ratelimit": {
+          "characteristics": [
+            "cf.colo.id",
+            "ip.src",
+          ],
+          "mitigation_timeout": 10,
+          "period": 10,
+          "requests_per_period": 300,
+        },
+        "ref": "flarewall_rate_limit",
+      },
+    ],
+    "http_request_dynamic_redirect": [
+      {
+        "action": "redirect",
+        "action_parameters": {
+          "from_value": {
+            "preserve_query_string": true,
+            "status_code": 301,
+            "target_url": {
+              "expression": "concat("https://", http.host, http.request.uri.path)",
+            },
+          },
+        },
+        "description": "flarewall: redirect HTTP to HTTPS",
+        "enabled": true,
+        "expression": "(not ssl)",
+        "ref": "flarewall_https",
+      },
+      {
+        "action": "redirect",
+        "action_parameters": {
+          "from_value": {
+            "preserve_query_string": true,
+            "status_code": 301,
+            "target_url": {
+              "expression": "concat("https://example.com", http.request.uri.path)",
+            },
+          },
+        },
+        "description": "flarewall: redirect to the canonical host",
+        "enabled": true,
+        "expression": "(http.host eq "www.example.com")",
+        "ref": "flarewall_canonical_host",
+      },
+    ],
+    "http_request_firewall_custom": [
+      {
+        "action": "block",
+        "description": "flarewall: block non-standard ports",
+        "enabled": true,
+        "expression": "(cf.edge.server_port ne 443 and cf.edge.server_port ne 80)",
+        "ref": "flarewall_ports",
+      },
+      {
+        "action": "block",
+        "description": "flarewall: block scanner probes",
+        "enabled": true,
+        "expression": "(http.user_agent eq "" and not http.host in {"api.example.com"}) or (lower(http.request.uri.path) contains ".env") or (lower(http.request.uri.path) contains "/.git") or (lower(http.request.uri.path) contains "/.aws/") or (lower(http.request.uri.path) contains "/.svn") or (lower(http.request.uri.path) contains "/.ds_store") or (lower(http.request.uri.path) contains "/.vscode") or (lower(http.request.uri.path) contains "%25") or (lower(http.request.uri.path) contains "phpinfo") or (lower(http.request.uri.path) contains "wp-config.php") or (lower(http.request.uri.path) contains "/phpmyadmin") or (lower(http.request.uri.path) contains "/actuator") or (lower(http.request.uri.path) contains "/server-status") or (lower(http.request.uri.path) contains "laravel-filemanager") or (ends_with(lower(http.request.uri.path), ".ini")) or (ends_with(lower(http.request.uri.path), ".sql")) or (ends_with(lower(http.request.uri.path), ".bak")) or (ends_with(lower(http.request.uri.path), ".sh")) or (ends_with(lower(http.request.uri.path), ".cgi")) or (ends_with(lower(http.request.uri.path), ".jsp")) or (ends_with(lower(http.request.uri.path), ".yml")) or (ends_with(lower(http.request.uri.path), ".yaml")) or (ends_with(lower(http.request.uri.path), ".tar.gz")) or (ends_with(lower(http.request.uri.path), ".tgz")) or (ends_with(lower(http.request.uri.path), "/xmlrpc.php")) or (starts_with(lower(http.request.uri.path), "/vendor/")) or (starts_with(lower(http.request.uri.path), "/cgi-bin/")) or (starts_with(lower(http.request.uri.path), "/venv/")) or ((ends_with(lower(http.request.uri.path), ".php") or starts_with(lower(http.request.uri.path), "/wp-")) and not http.host in {"blog.example.com"})",
+        "ref": "flarewall_probes",
+      },
+      {
+        "action": "managed_challenge",
+        "description": "flarewall: challenge hosting networks (verified bots, API hosts, origins allowed)",
+        "enabled": true,
+        "expression": "(ip.src.asnum in {8075 16509 14618 396982 31898 14061 24940 16276 63949 20473 132203 45090 37963 45102 48090} and not cf.client.bot and not starts_with(http.request.uri.path, "/.well-known/acme-challenge/") and not http.host in {"api.example.com"} and not ip.src in {192.0.2.10 2001:db8::10})",
+        "ref": "flarewall_hosting",
+      },
+      {
+        "action": "managed_challenge",
+        "description": "flarewall: challenge traffic from outside the home country (verified bots, API hosts, origins allowed)",
+        "enabled": true,
+        "expression": "(ip.src.country ne "XX" and not cf.client.bot and not starts_with(http.request.uri.path, "/.well-known/acme-challenge/") and not http.host in {"api.example.com"} and not ip.src in {192.0.2.10 2001:db8::10})",
+        "ref": "flarewall_geo",
+      },
+    ],
+  },
+  "settings": {
+    "always_use_https": "on",
+  },
+  "zone": "example.com",
+}
+`;
+
+exports[`render snapshots > full render output: no-hosts-www 1`] = `
+{
+  "botManagement": {
+    "enable_js": true,
+    "fight_mode": true,
+  },
+  "phases": {
+    "http_ratelimit": [
+      {
+        "action": "block",
+        "description": "flarewall: rate limit per IP and data center",
+        "enabled": true,
+        "expression": "(starts_with(http.request.uri.path, "/"))",
+        "ratelimit": {
+          "characteristics": [
+            "cf.colo.id",
+            "ip.src",
+          ],
+          "mitigation_timeout": 10,
+          "period": 10,
+          "requests_per_period": 300,
+        },
+        "ref": "flarewall_rate_limit",
+      },
+    ],
+    "http_request_dynamic_redirect": [
+      {
+        "action": "redirect",
+        "action_parameters": {
+          "from_value": {
+            "preserve_query_string": true,
+            "status_code": 301,
+            "target_url": {
+              "expression": "concat("https://", http.host, http.request.uri.path)",
+            },
+          },
+        },
+        "description": "flarewall: redirect HTTP to HTTPS",
+        "enabled": true,
+        "expression": "(not ssl)",
+        "ref": "flarewall_https",
+      },
+      {
+        "action": "redirect",
+        "action_parameters": {
+          "from_value": {
+            "preserve_query_string": true,
+            "status_code": 301,
+            "target_url": {
+              "expression": "concat("https://www.example.com", http.request.uri.path)",
+            },
+          },
+        },
+        "description": "flarewall: redirect to the canonical host",
+        "enabled": true,
+        "expression": "(http.host eq "example.com")",
+        "ref": "flarewall_canonical_host",
+      },
+    ],
+    "http_request_firewall_custom": [
+      {
+        "action": "block",
+        "description": "flarewall: block non-standard ports",
+        "enabled": true,
+        "expression": "(cf.edge.server_port ne 443 and cf.edge.server_port ne 80)",
+        "ref": "flarewall_ports",
+      },
+      {
+        "action": "block",
+        "description": "flarewall: block scanner probes",
+        "enabled": true,
+        "expression": "(http.user_agent eq "") or (lower(http.request.uri.path) contains ".env") or (lower(http.request.uri.path) contains "/.git") or (lower(http.request.uri.path) contains "/.aws/") or (lower(http.request.uri.path) contains "/.svn") or (lower(http.request.uri.path) contains "/.ds_store") or (lower(http.request.uri.path) contains "/.vscode") or (lower(http.request.uri.path) contains "%25") or (lower(http.request.uri.path) contains "phpinfo") or (lower(http.request.uri.path) contains "wp-config.php") or (lower(http.request.uri.path) contains "/phpmyadmin") or (lower(http.request.uri.path) contains "/actuator") or (lower(http.request.uri.path) contains "/server-status") or (lower(http.request.uri.path) contains "laravel-filemanager") or (ends_with(lower(http.request.uri.path), ".ini")) or (ends_with(lower(http.request.uri.path), ".sql")) or (ends_with(lower(http.request.uri.path), ".bak")) or (ends_with(lower(http.request.uri.path), ".sh")) or (ends_with(lower(http.request.uri.path), ".cgi")) or (ends_with(lower(http.request.uri.path), ".jsp")) or (ends_with(lower(http.request.uri.path), ".yml")) or (ends_with(lower(http.request.uri.path), ".yaml")) or (ends_with(lower(http.request.uri.path), ".tar.gz")) or (ends_with(lower(http.request.uri.path), ".tgz")) or (ends_with(lower(http.request.uri.path), "/xmlrpc.php")) or (starts_with(lower(http.request.uri.path), "/vendor/")) or (starts_with(lower(http.request.uri.path), "/cgi-bin/")) or (starts_with(lower(http.request.uri.path), "/venv/")) or ((ends_with(lower(http.request.uri.path), ".php") or starts_with(lower(http.request.uri.path), "/wp-")))",
+        "ref": "flarewall_probes",
+      },
+      {
+        "action": "managed_challenge",
+        "description": "flarewall: challenge hosting networks (verified bots, API hosts, origins allowed)",
+        "enabled": true,
+        "expression": "(ip.src.asnum in {8075 16509 14618 396982 31898 14061 24940 16276 63949 20473 132203 45090 37963 45102 48090} and not cf.client.bot and not starts_with(http.request.uri.path, "/.well-known/acme-challenge/"))",
+        "ref": "flarewall_hosting",
+      },
+    ],
+  },
+  "settings": {
+    "always_use_https": "on",
+    "browser_check": "on",
+  },
+  "zone": "example.com",
+}
+`;

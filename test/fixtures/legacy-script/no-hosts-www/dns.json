@@ -1,0 +1,4 @@
+[
+  {"name":"example.com","type":"A","content":"192.0.2.1","proxied":true},
+  {"name":"www.example.com","type":"CNAME","content":"example.com","proxied":true}
+]
