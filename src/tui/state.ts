@@ -42,6 +42,11 @@ export interface TuiData {
   inventories: Inventory[];
 }
 
+/** A diff pane line. A zone card line has a label, which the screen shows dim before the text. */
+export interface PaneLine extends DiffLine {
+  label?: string;
+}
+
 /** One zone row. A row with no report is still loading. */
 export interface Row {
   zone: string;
@@ -184,9 +189,13 @@ export function selectedRow(state: TuiState): Row | undefined {
   return state.zones.find((r) => r.zone === state.selected);
 }
 
-/** Lines inside a pane border: the terminal less the header (and its error line), two border lines, and the hint line. */
+/**
+ * Lines inside a pane border: the terminal less the top bars (three lines), the two pane border
+ * lines, the footer box (the summary line and the hint line in a border, four lines), and the
+ * error line when there is one.
+ */
 export function bodyHeight(state: TuiState): number {
-  return Math.max(1, state.rows - 4 - (state.error === undefined ? 0 : 1));
+  return Math.max(1, state.rows - 9 - (state.error === undefined ? 0 : 1));
 }
 
 /** Zone rows that fit under the column header. */
@@ -200,6 +209,46 @@ function halfPage(state: TuiState): number {
 
 export const LIST_HEADERS = ['ZONE', 'PLAN', 'STATE', 'CHANGES', 'UNOWNED', 'HOSTS', 'GEO', 'REDIRECT'] as const;
 
+/** The list columns that hold a count. They align right, so the digits line up. */
+export const NUMBER_COLUMNS: readonly number[] = [3, 4, 5];
+
+/** The list column of each sort, which carries the sort arrow. */
+const SORT_COLUMN: Readonly<Record<Sort, number>> = { zone: 0, plan: 1, state: 2, changes: 3 };
+
+/** The column headers, with `↓` after the column the list is sorted on. */
+export function listHeaders(state: TuiState): string[] {
+  return LIST_HEADERS.map((h, i) => (i === SORT_COLUMN[state.sort] ? `${h} ↓` : h));
+}
+
+/** A mark before each state word. The word stays, so the mark and the colour are never the only signal. */
+const STATE_GLYPH: Readonly<Record<string, string>> = {
+  'in sync': '✓',
+  drift: '▲',
+  legacy: '◆',
+  error: '✗',
+  'not managed': '○',
+  loading: '…',
+};
+
+/** The STATE cell text: the mark, then the state word. */
+export function stateLabel(word: string): string {
+  const glyph = STATE_GLYPH[word];
+  return glyph === undefined ? word : `${glyph} ${word}`;
+}
+
+/** The short plan name for the list, as in the sketch: `Free Website` shows as `free`. */
+export function planLabel(plan: string): string {
+  return plan.replace(/\s+website$/i, '').trim().toLowerCase();
+}
+
+/** The header counts, in state order. `not managed` and `loading` show only when a zone has them. */
+export function headerCounts(state: TuiState): { word: string; count: number }[] {
+  const count = (word: string) => state.zones.filter((r) => stateWord(r) === word).length;
+  return ['in sync', 'drift', 'legacy', 'error', 'not managed', 'loading']
+    .map((word) => ({ word, count: count(word) }))
+    .filter((c) => c.count > 0 || !['not managed', 'loading'].includes(c.word));
+}
+
 /** The eight list cells of a row. Inventory cells draw at once; report cells wait for the report. */
 export function rowCells(row: Row): string[] {
   const inv = row.inventory;
@@ -207,8 +256,8 @@ export function rowCells(row: Row): string[] {
   const count = (n: number | undefined) => (n === undefined ? '-' : String(n));
   return [
     row.zone,
-    row.report?.plan || row.plan || '-',
-    stateWord(row),
+    planLabel(row.report?.plan || row.plan) || '-',
+    stateLabel(stateWord(row)),
     count(diff?.changes.length),
     count(diff?.unowned.length),
     inv === undefined ? '-' : String(inv.hosts.api.length + inv.hosts.wordpress.length),
@@ -217,20 +266,32 @@ export function rowCells(row: Row): string[] {
   ];
 }
 
-/** The width of each list column over the header and every row. */
+/** The width of each list column over the header and every row. Each sortable header keeps room for its arrow, so the list does not move when the sort changes. */
 export function columnWidths(state: TuiState): number[] {
-  const rows = [[...LIST_HEADERS], ...state.zones.map(rowCells)];
+  const headers = LIST_HEADERS.map((h, i) => (Object.values(SORT_COLUMN).includes(i) ? `${h} ↓` : h));
+  const rows = [headers, ...state.zones.map(rowCells)];
   return LIST_HEADERS.map((_, i) => Math.max(...rows.map((r) => (r[i] ?? '').length)));
 }
 
-/** The width of the zone list pane: the marker, the columns with two-space gaps, and the border. */
+/** The width of the zone list pane: the marker, the columns with two-space gaps, the padding, and the border. */
 export function listWidth(state: TuiState): number {
   const widths = columnWidths(state);
-  return 2 + widths.reduce((a, b) => a + b, 0) + 2 * (widths.length - 1) + 2;
+  return 2 + widths.reduce((a, b) => a + b, 0) + 2 * (widths.length - 1) + 2 + 2;
 }
 
 /** The narrowest diff pane, border included, that the two-pane layout keeps. */
 export const MIN_DIFF_WIDTH = 50;
+
+/** The share of the window the zones pane takes in the two-pane layout. */
+export const ZONES_PANE_SHARE = 0.75;
+
+/**
+ * The zones pane width in the two-pane layout: 75% of the window, but never narrower than the list
+ * and never so wide that the diff pane drops under MIN_DIFF_WIDTH.
+ */
+export function zonesPaneWidth(state: TuiState): number {
+  return Math.max(listWidth(state), Math.min(Math.floor(state.columns * ZONES_PANE_SHARE), state.columns - MIN_DIFF_WIDTH));
+}
 
 /** True when the terminal cannot fit the list beside a diff pane, so one pane shows at a time. */
 export function isNarrow(state: TuiState): boolean {
@@ -255,6 +316,33 @@ export function confirmPrompt(zone: string): string {
   return `Apply the baseline to ${zone}? [y/N]`;
 }
 
+/** The width of the label column in the zone card. */
+export const CARD_LABEL_WIDTH = 11;
+
+/**
+ * The zone card at the top of the diff pane: the facts of the selected zone, one per line.
+ * The inventory lines show only for a zone with an inventory entry.
+ */
+export function zoneCard(row: Row): PaneLine[] {
+  const plan = planLabel(row.report?.plan || row.plan);
+  const lines: PaneLine[] = [
+    ...(plan === '' ? [] : [{ label: 'Plan', text: plan }]),
+    ...(row.zoneId === undefined ? [] : [{ label: 'Zone ID', text: row.zoneId }]),
+  ];
+  const inv = row.inventory;
+  if (inv !== undefined) {
+    const hosts = (list: readonly string[]) => (list.length === 0 ? '-' : list.join(', '));
+    lines.push(
+      { label: 'API hosts', text: hosts(inv.hosts.api) },
+      { label: 'WP hosts', text: hosts(inv.hosts.wordpress) },
+      { label: 'Geo', text: inv.geo?.enabled === true ? `block outside ${inv.geo.country ?? '-'}` : 'off' },
+      { label: 'Redirect', text: inv.redirects },
+      ...(inv.rate_limit === undefined ? [] : [{ label: 'Rate limit', text: `${inv.rate_limit.requests} requests (zone override)` }]),
+    );
+  }
+  return lines.length === 0 ? [] : [...lines, { text: '' }];
+}
+
 /** The diff pane title: the zone, and `plan (i of n)` while the zone has run text. */
 export function diffPaneTitle(state: TuiState): string {
   const row = selectedRow(state);
@@ -269,7 +357,7 @@ export function diffPaneTitle(state: TuiState): string {
  * The diff pane text of the selected zone: its dry run or write text when it has one (with the
  * prompt in CONFIRM), else its diff. An error zone shows its error text.
  */
-export function diffPaneLines(state: TuiState): DiffLine[] {
+export function diffPaneLines(state: TuiState): PaneLine[] {
   const row = selectedRow(state);
   if (row === undefined) return [];
   const run = state.runLines[row.zone];
@@ -277,8 +365,22 @@ export function diffPaneLines(state: TuiState): DiffLine[] {
     const prompt = state.mode.kind === 'confirm' && state.mode.zone === row.zone ? [confirmPrompt(row.zone)] : [];
     return [...run, ...prompt].map((text) => ({ text }));
   }
-  if (row.report === undefined) return [{ text: `${row.zone}: loading` }];
-  return zoneDiffLines(row.report, { foreign: state.showForeign, values: state.showValues });
+  const card = zoneCard(row);
+  if (row.report === undefined) return [...card, { text: `${row.zone}: loading` }];
+  if (row.inventory === undefined || row.report.state === 'not managed') return [...card, ...notManagedLines(state, row.zone)];
+  const lines = zoneDiffLines(row.report, { foreign: state.showForeign, values: state.showValues });
+  // The pane title already shows the zone and its state, so drop the line that only repeats them.
+  const body = lines[0]?.text === `${row.zone}: ${row.report.state}` ? lines.slice(1) : lines;
+  return [...card, ...(body.length === 0 ? [{ text: 'No changes.' }] : body)];
+}
+
+/** The diff pane of a `not managed` zone: the next step, and the empty state when no zone is managed. */
+function notManagedLines(state: TuiState, zone: string): DiffLine[] {
+  const lines = ['No inventory entry for this zone.', `Run flarewall add ${zone} to manage it.`];
+  if (state.zones.every((r) => r.inventory === undefined)) {
+    lines.push('', `No zone has an inventory entry: 0 of ${state.zones.length} zones are managed.`, 'Run flarewall add <zone> for each zone you want to manage, then press R.');
+  }
+  return lines.map((text) => ({ text }));
 }
 
 function maxScroll(state: TuiState): number {
@@ -407,6 +509,11 @@ function markAll(state: TuiState): TuiState {
 function runTargets(state: TuiState): string[] {
   if (state.focus === 'diff' || state.marks.length === 0) return state.selected === undefined ? [] : [state.selected];
   return visibleRows(state).map((r) => r.zone).filter((z) => state.marks.includes(z));
+}
+
+/** True when `d` or `a` has at least one zone to run; the hint line dims both keys when not. */
+export function canRun(state: TuiState): boolean {
+  return runTargets(state).some((zone) => skipLine(state.zones.find((r) => r.zone === zone), zone) === undefined);
 }
 
 /** Why a zone is skipped: no inventory entry, or an error state. Undefined when it can run. */

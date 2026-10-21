@@ -112,22 +112,22 @@ function resize(stdout: { emit: (event: string) => boolean }, columns: number) {
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** The frame line of a zone row: the border, the selection marker, then the zone name. */
+/** The frame line of a zone row: the border, the padding, the selection marker, then the zone name. */
 function rowLine(frame: string, zone: string): string | undefined {
-  const pattern = new RegExp(`^│(> |  )${escape(zone)}\\s`);
+  const pattern = new RegExp(`^│ (> |  )${escape(zone)}\\s`);
   return frame.split('\n').find((l) => pattern.test(l));
 }
 
 /** The diff pane column of a two-pane frame: each line from the second top-border corner on. */
 function diffColumn(frame: string): string {
   const lines = frame.split('\n');
-  const top = lines.find((l) => l.indexOf('┌') !== l.lastIndexOf('┌')) ?? '';
-  const at = top.lastIndexOf('┌');
+  const top = lines.find((l) => l.indexOf('╭') !== l.lastIndexOf('╭')) ?? '';
+  const at = top.lastIndexOf('╭');
   return lines.map((l) => l.slice(at)).join('\n');
 }
 
 /** The frame text without borders, with each run of white space as one space. */
-const flat = (text: string) => text.replace(/[│┌┐└┘─]/g, ' ').replace(/\s+/g, ' ');
+const flat = (text: string) => text.replace(/[│┌┐└┘╭╮╰╯─]/g, ' ').replace(/\s+/g, ' ');
 
 async function loadedScreen(api: FakeCloudflareApi) {
   const screen = start(api);
@@ -177,7 +177,7 @@ describe('TUI frames', () => {
       for (const zone of INVENTORY_ZONES) expect(rowLine(screen.frame(), zone), zone).toBeDefined();
     });
     const frame = screen.frame();
-    expect(frame).toMatch(/ZONE\s+PLAN\s+STATE\s+CHANGES\s+UNOWNED\s+HOSTS\s+GEO\s+REDIRECT/);
+    expect(frame).toMatch(/ZONE ↓\s+PLAN ?\s+STATE\s+CHANGES\s+UNOWNED\s+HOSTS\s+GEO\s+REDIRECT/);
     for (const zone of INVENTORY_ZONES) expect(rowLine(frame, zone), zone).toMatch(/\sloading\s/);
     // The inventory columns draw at once: example.net has two hosts, geo XX, and www redirects.
     expect(rowLine(frame, 'example.net')).toMatch(/loading\s+-\s+-\s+2\s+XX\s+www/);
@@ -191,11 +191,12 @@ describe('TUI frames', () => {
     const { baseline, inventories } = await loadData(dir);
     const second = (await statusAll(api, baseline, inventories, ['example.com']))[0];
     if (second === undefined) throw new Error('no report for example.com');
-    const want = flat(diffLines([second]).join('\n'));
+    // The pane title carries `example.com ◆ legacy`, so the pane drops the head line that repeats it.
+    const want = flat(diffLines([second]).slice(1).join('\n'));
 
     const screen = await loadedScreen(api);
-    resize(screen.stdout, 220);
-    await vi.waitFor(() => expect(screen.frame()).toContain('bad.example.com error'));
+    resize(screen.stdout, 400);
+    await vi.waitFor(() => expect(screen.frame()).toContain('bad.example.com ✗ error'));
     expect(flat(diffColumn(screen.frame()))).not.toContain(want);
     screen.stdin.write('j');
     await vi.waitFor(() => expect(flat(diffColumn(screen.frame()))).toContain(want));
@@ -207,7 +208,7 @@ describe('TUI frames', () => {
     seed(api);
     const screen = await loadedScreen(api);
     const zonesOnly = screen.frame();
-    expect(zonesOnly).toMatch(/ZONE\s+PLAN\s+STATE/);
+    expect(zonesOnly).toMatch(/ZONE ↓\s+PLAN\s+STATE/);
     expect(zonesOnly).toContain('1/2');
     expect(zonesOnly).not.toContain('bad.example.com: error: getPhase failed');
 
@@ -215,15 +216,15 @@ describe('TUI frames', () => {
     await vi.waitFor(() => expect(screen.frame()).toContain('2/2'));
     const diffOnly = screen.frame();
     expect(diffOnly).toContain('bad.example.com: error: getPhase failed: 403 forbidden');
-    expect(diffOnly).not.toMatch(/ZONE\s+PLAN\s+STATE/);
+    expect(diffOnly).not.toMatch(/ZONE ↓\s+PLAN\s+STATE/);
 
     screen.stdin.write('\t');
     await vi.waitFor(() => expect(screen.frame()).toContain('1/2'));
-    expect(screen.frame()).toMatch(/ZONE\s+PLAN\s+STATE/);
+    expect(screen.frame()).toMatch(/ZONE ↓\s+PLAN\s+STATE/);
 
-    resize(screen.stdout, 220);
+    resize(screen.stdout, 400);
     await vi.waitFor(() => expect(screen.frame()).not.toContain('1/2'));
-    expect(screen.frame()).toMatch(/ZONE\s+PLAN\s+STATE/);
+    expect(screen.frame()).toMatch(/ZONE ↓\s+PLAN\s+STATE/);
     expect(screen.frame()).toContain('bad.example.com: error: getPhase failed: 403 forbidden');
   });
 

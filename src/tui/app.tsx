@@ -2,36 +2,34 @@
 // Components render the state and send key events. No Cloudflare call and no rule logic here.
 import { Box, Text, useInput, useWindowSize, type Key } from 'ink';
 import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
-import { hints, KEYMAP, SCOPE_TITLES, type Scope } from './keymap.js';
+import { hintBindings, KEYMAP, SCOPE_TITLES, type Scope } from './keymap.js';
 import {
   bodyHeight,
+  CARD_LABEL_WIDTH,
+  canRun,
   columnWidths,
   confirmPrompt,
   diffPaneLines,
   diffPaneTitle,
+  headerCounts,
   isNarrow,
-  LIST_HEADERS,
+  listHeaders,
   listHeight,
   listWidth,
   markSummary,
+  NUMBER_COLUMNS,
   rowCells,
   hintScopes,
   selectedRow,
+  stateLabel,
   stateWord,
   visibleRows,
+  zonesPaneWidth,
   type TuiEvent,
   type TuiState,
 } from './state.js';
 import type { Store } from './store.js';
-
-/** The fixed state colours. Every state also shows as a word, so colour is never the only signal. */
-const STATE_COLOR: Readonly<Record<string, string>> = {
-  'in sync': 'green',
-  drift: 'yellow',
-  legacy: 'magenta',
-  error: 'red',
-  'not managed': 'gray',
-};
+import { lineColor, STATE_COLOR, THEME } from './theme.js';
 
 /** Turns an Ink key press into a key event with a key map name. */
 export function keyEvent(input: string, key: Key): TuiEvent | undefined {
@@ -58,92 +56,160 @@ function oneLine(text: string): string {
     .join(' ');
 }
 
+/** A state word with its mark, in the state colour. */
 function StateText({ word, width }: { word: string; width?: number }) {
-  const text = width === undefined ? word : word.padEnd(width);
-  const color = STATE_COLOR[word];
-  return color === undefined ? <Text dimColor>{text}</Text> : <Text color={color}>{text}</Text>;
+  const label = stateLabel(word);
+  const text = width === undefined ? label : label.padEnd(width);
+  return <Text color={STATE_COLOR[word] ?? THEME.muted}>{text}</Text>;
 }
 
-/** A bordered pane with its title, and an optional state word, in the top border. */
-function Pane({ title, word, width, height, focused, children }: { title: string; word?: string; width: number; height: number; focused: boolean; children: ReactNode }) {
-  const color = focused ? 'cyan' : undefined;
-  const label = word === undefined ? title : `${title} ${word}`;
+/**
+ * A pane with rounded borders. The title, and an optional state word, sit in the top border;
+ * an optional footer, such as the position in the list, sits at the right of the bottom border.
+ * The focused pane has an accent border and a bold title; the other pane has a grey border.
+ */
+function Pane({ title, word, footer, width, height, focused, children }: { title: string; word?: string; footer?: string; width: number; height: number; focused: boolean; children: ReactNode }) {
+  const color = focused ? THEME.activeBorder : THEME.inactiveBorder;
+  const label = word === undefined ? title : `${title} ${stateLabel(word)}`;
   const dashes = Math.max(0, width - label.length - 4);
+  const tail = footer === undefined ? '' : ` ${footer} ─`;
   return (
     <Box flexDirection="column" width={width}>
-      <Text wrap="truncate-end">
-        <Text color={color}>┌ </Text>
-        {title}
-        {word === undefined ? null : (
-          <>
-            {' '}
-            <StateText word={word} />
-          </>
-        )}
-        <Text color={color}>{` ${'─'.repeat(dashes)}┐`}</Text>
-      </Text>
-      <Box borderStyle="single" borderTop={false} borderColor={color} width={width} height={height + 1} flexDirection="column" overflow="hidden">
+      {title === '' ? (
+        <Text wrap="truncate-end" color={color}>{`╭${'─'.repeat(Math.max(0, width - 2))}╮`}</Text>
+      ) : (
+        <Text wrap="truncate-end">
+          <Text color={color}>╭ </Text>
+          <Text bold={focused} color={focused ? THEME.activeBorder : THEME.inactiveTitle}>
+            {title}
+          </Text>
+          {word === undefined ? null : (
+            <>
+              {' '}
+              <StateText word={word} />
+            </>
+          )}
+          <Text color={color}>{` ${'─'.repeat(dashes)}╮`}</Text>
+        </Text>
+      )}
+      <Box borderStyle="round" borderTop={false} borderBottom={false} borderColor={color} width={width} height={height} paddingX={1} flexDirection="column" overflow="hidden">
         {/* Lines keep their height; the border box clips what does not fit. */}
         <Box flexDirection="column" flexShrink={0}>
           {children}
         </Box>
       </Box>
+      <Text wrap="truncate-end" color={color}>
+        {`╰${'─'.repeat(Math.max(0, width - 2 - tail.length))}${tail}╯`}
+      </Text>
     </Box>
   );
 }
 
-function Header({ state }: { state: TuiState }) {
-  const count = (word: string) => state.zones.filter((r) => stateWord(r) === word).length;
-  const loading = count('loading');
-  const parts = [
-    'flarewall',
-    ...(isNarrow(state) ? [state.focus === 'zones' ? '1/2' : '2/2'] : []),
-    `data ${state.dataDir}`,
-    `${state.zones.length} zones`,
-    `${count('drift')} drift`,
-    `${count('legacy')} legacy`,
-    `${count('error')} error`,
-    ...(loading > 0 ? [`${loading} loading`] : []),
-    `filter: ${state.stateFilter}${state.filterText === '' ? '' : ` /${state.filterText}`}`,
-    `sort: ${state.sort}`,
-    ...(markSummary(state) === undefined ? [] : [markSummary(state) as string]),
-  ];
+/** The reload error, in red on the top line, as the plan's reload rule asks. Absent with no error. */
+function ErrorLine({ state }: { state: TuiState }) {
+  if (state.error === undefined) return null;
   return (
-    <Box flexDirection="column">
-      <Text wrap="truncate-end">{parts.join('  ')}</Text>
-      {state.error === undefined ? null : (
-        <Text color="red" wrap="truncate-end">
-          {oneLine(state.error)}
+    <Text color={THEME.danger} wrap="truncate-end">
+      {oneLine(state.error)}
+    </Text>
+  );
+}
+
+/** The widths of the search bar and the Filters bar. In two panes they line up with the list and the details pane. */
+function barWidths(state: TuiState, filters: string): [number, number] {
+  if (!isNarrow(state)) {
+    const left = zonesPaneWidth(state);
+    return [left, state.columns - left];
+  }
+  const right = Math.min(Math.max(filters.length + 4, 24), Math.floor(state.columns / 2));
+  return [state.columns - right, right];
+}
+
+/** The top bars: the zone name search on the left, and the state filter, the sort, and the marks on the right. */
+function TopBars({ state }: { state: TuiState }) {
+  const typing = state.mode.kind === 'filter' && !state.help;
+  const marks = markSummary(state);
+  const filters = `state: ${state.stateFilter}  sort: ${state.sort} ↓${marks === undefined ? '' : `  ${marks}`}`;
+  const [left, right] = barWidths(state, filters);
+  return (
+    <Box>
+      <Pane title="Search" width={left} height={1} focused={typing}>
+        <Text wrap="truncate-end" color={THEME.text}>
+          {typing ? (
+            `/ ${state.filterText}_`
+          ) : state.filterText === '' ? (
+            <Text color={THEME.muted}>/ filter zones by name</Text>
+          ) : (
+            `/ ${state.filterText}`
+          )}
         </Text>
-      )}
+      </Pane>
+      <Pane title="Filters" width={right} height={1} focused={false}>
+        <Text wrap="truncate-end" color={THEME.text}>
+          {filters}
+        </Text>
+      </Pane>
     </Box>
+  );
+}
+
+/** The summary under the panes: the pane in view on a narrow terminal, the zone counts, and the data repo. */
+function Summary({ state }: { state: TuiState }) {
+  const bar = <Text color={THEME.separator}>{' | '}</Text>;
+  return (
+    <Text wrap="truncate-end" color={THEME.hint}>
+      {isNarrow(state) && !state.help ? (
+        <>
+          <Text color={THEME.activeBorder}>{state.focus === 'zones' ? '1/2' : '2/2'}</Text>
+          {bar}
+        </>
+      ) : null}
+      <Text bold color={THEME.text}>
+        {state.zones.length}
+      </Text>
+      {' zones'}
+      {headerCounts(state).map(({ word, count }) => (
+        <Text key={word}>
+          {bar}
+          {/* A zero count stays muted, so only the states that need a look carry colour. */}
+          {count === 0 ? <Text color={THEME.muted}>0</Text> : <Text color={STATE_COLOR[word]} bold>{String(count)}</Text>}
+          {` ${word}`}
+        </Text>
+      ))}
+      {bar}
+      {`data ${state.dataDir}`}
+    </Text>
   );
 }
 
 function ZonesPane({ state, width }: { state: TuiState; width: number }) {
   const widths = columnWidths(state);
-  const cells = (row: string[]) => row.map((c, i) => c.padEnd(widths[i] ?? 0));
-  const rows = visibleRows(state).slice(state.listTop, state.listTop + listHeight(state));
+  const cells = (row: string[]) => row.map((c, i) => (NUMBER_COLUMNS.includes(i) ? c.padStart(widths[i] ?? 0) : c.padEnd(widths[i] ?? 0)));
+  const visible = visibleRows(state);
+  const rows = visible.slice(state.listTop, state.listTop + listHeight(state));
+  const at = visible.findIndex((r) => r.zone === state.selected);
   return (
-    <Pane title="Zones" width={width} height={bodyHeight(state)} focused={state.focus === 'zones'}>
-      <Text bold wrap="truncate-end">
+    <Pane title="Zones" footer={at === -1 ? `0 of ${visible.length}` : `${at + 1} of ${visible.length}`} width={width} height={bodyHeight(state)} focused={state.focus === 'zones'}>
+      <Text bold color={THEME.heading} wrap="truncate-end">
         {'  '}
-        {cells([...LIST_HEADERS]).join('  ').trimEnd()}
+        {cells(listHeaders(state)).join('  ').trimEnd()}
       </Text>
       {rows.map((row) => {
         const [zone, plan, word, ...rest] = cells(rowCells(row));
         const selected = row.zone === state.selected;
         return (
-          <Text key={row.zone} wrap="truncate-end" bold={selected}>
-            {selected ? '>' : ' '}
-            {state.marks.includes(row.zone) ? '●' : ' '}
+          // The selection is a surface bar over the whole row, so the eye follows it across the columns.
+          <Text key={row.zone} wrap="truncate-end" color={THEME.text} bold={selected} {...(selected ? { backgroundColor: THEME.selection } : {})}>
+            <Text color={THEME.activeBorder}>{selected ? '>' : ' '}</Text>
+            <Text color={THEME.mark}>{state.marks.includes(row.zone) ? '●' : ' '}</Text>
             {zone}
             {'  '}
             {plan}
             {'  '}
             <StateText word={stateWord(row)} width={(word ?? '').length} />
             {'  '}
-            {rest.join('  ').trimEnd()}
+            {/* The bar runs to the pane's inner edge, past the last column, when the pane is wider than the list. */}
+            {selected ? `${rest.join('  ')}${' '.repeat(Math.max(0, width - listWidth(state)))}` : rest.join('  ').trimEnd()}
           </Text>
         );
       })}
@@ -153,12 +219,18 @@ function ZonesPane({ state, width }: { state: TuiState; width: number }) {
 
 function DiffPane({ state, width }: { state: TuiState; width: number }) {
   const row = selectedRow(state);
-  const lines = diffPaneLines(state).slice(state.diffScroll, state.diffScroll + bodyHeight(state));
+  const all = diffPaneLines(state);
+  const height = bodyHeight(state);
+  const lines = all.slice(state.diffScroll, state.diffScroll + height);
+  // The footer shows the visible line range only when the text does not fit.
+  const footer = all.length > height ? `${state.diffScroll + 1}-${Math.min(state.diffScroll + height, all.length)} of ${all.length}` : undefined;
   return (
-    <Pane title={diffPaneTitle(state)} {...(row === undefined || state.runLines[row.zone] !== undefined ? {} : { word: stateWord(row) })} width={width} height={bodyHeight(state)} focused={state.focus === 'diff'}>
+    <Pane title={diffPaneTitle(state)} {...(row === undefined || state.runLines[row.zone] !== undefined ? {} : { word: stateWord(row) })} {...(footer === undefined ? {} : { footer })} width={width} height={height} focused={state.focus === 'diff'}>
       {lines.map((line, i) => (
+        // Ink gives an empty Text no height, so a blank line renders as one space.
         <Text key={`${state.diffScroll + i}`} wrap="wrap">
-          {line.text}
+          {line.label === undefined ? null : <Text color={THEME.muted}>{line.label.padEnd(CARD_LABEL_WIDTH)}</Text>}
+          <Text color={line.label === undefined ? (lineColor(line.text) ?? THEME.text) : THEME.text}>{line.text === '' ? ' ' : line.text}</Text>
         </Text>
       ))}
     </Pane>
@@ -172,13 +244,13 @@ function HelpPane({ state }: { state: TuiState }) {
   return (
     <Pane title="Help" width={state.columns} height={bodyHeight(state)} focused>
       {groups.flatMap((scope) => [
-        <Text key={scope} bold wrap="truncate-end">
+        <Text key={scope} bold color={THEME.heading} wrap="truncate-end">
           {SCOPE_TITLES[scope]}
         </Text>,
         ...KEYMAP.filter((b) => b.scope === scope).map((b) => (
-          <Text key={`${scope} ${b.action}`} wrap="truncate-end">
+          <Text key={`${scope} ${b.action}`} wrap="truncate-end" color={THEME.text}>
             {'  '}
-            {keys(b.keys).padEnd(width)}
+            <Text color={THEME.key}>{keys(b.keys).padEnd(width)}</Text>
             {'  '}
             {b.help}
           </Text>
@@ -188,17 +260,43 @@ function HelpPane({ state }: { state: TuiState }) {
   );
 }
 
+/** The key hints of the current mode. In CONFIRM, the y/N prompt leads the line in bold red. */
 function HintLine({ state }: { state: TuiState }) {
-  const mode = state.help ? 'HELP' : state.mode.kind.toUpperCase();
-  const filter = state.mode.kind === 'filter' && !state.help ? `/${state.filterText}_  ` : '';
-  const ask = state.mode.kind === 'confirm' && !state.help ? `${confirmPrompt(state.mode.zone)}  ` : '';
+  const ask = state.mode.kind === 'confirm' && !state.help ? confirmPrompt(state.mode.zone) : undefined;
+  // `d` and `a` stay in the line, as the mode's keys, but dim when every target zone would be skipped.
+  const idle = !canRun(state);
   return (
     <Text wrap="truncate-end">
-      <Text inverse bold>
-        {` ${mode} `}
-      </Text>
-      {`  ${filter}${ask}${hints(hintScopes(state)).join('  ')}`}
+      {ask === undefined ? null : (
+        <Text color={THEME.danger} bold>
+          {`${ask}  `}
+        </Text>
+      )}
+      {hintBindings(hintScopes(state)).map((b, i) => {
+        // The key in the accent colour, then its action in plain text. A typed-text hint has no key.
+        const hint = b.hint as string;
+        const space = hint.indexOf(' ');
+        const keys = b.keys.length === 0 || space === -1 ? '' : hint.slice(0, space);
+        const dim = idle && (b.action === 'dry-run' || b.action === 'apply');
+        return (
+          <Text key={`${b.scope} ${b.action}`} color={dim ? THEME.idle : THEME.hint}>
+            {i === 0 ? '' : '  '}
+            {keys === '' ? null : <Text color={dim ? THEME.idle : THEME.key}>{keys}</Text>}
+            {keys === '' ? hint : hint.slice(space)}
+          </Text>
+        );
+      })}
     </Text>
+  );
+}
+
+/** The footer box under the panes: the summary line, then the key hints. */
+function Footer({ state }: { state: TuiState }) {
+  return (
+    <Pane title="" width={state.columns} height={2} focused={false}>
+      <Summary state={state} />
+      <HintLine state={state} />
+    </Pane>
   );
 }
 
@@ -207,7 +305,7 @@ function Body({ state }: { state: TuiState }) {
   if (isNarrow(state)) {
     return state.focus === 'zones' ? <ZonesPane state={state} width={state.columns} /> : <DiffPane state={state} width={state.columns} />;
   }
-  const left = listWidth(state);
+  const left = zonesPaneWidth(state);
   return (
     <Box>
       <ZonesPane state={state} width={left} />
@@ -239,10 +337,12 @@ export function App({ store, rows }: AppProps) {
   });
 
   return (
+    // No background colour: the terminal's own background shows through, so the TUI sits in the terminal theme.
     <Box flexDirection="column" width={state.columns}>
-      <Header state={state} />
+      <ErrorLine state={state} />
+      <TopBars state={state} />
       <Body state={state} />
-      <HintLine state={state} />
+      <Footer state={state} />
     </Box>
   );
 }

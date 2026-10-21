@@ -70,10 +70,10 @@ function seed(api: FakeCloudflareApi, dir: string): { com: FakeZone; org: FakeZo
 
 function start(api: FakeCloudflareApi, dir: string) {
   const onQuit = vi.fn();
-  const { store, element } = createTui({ api, dataDir: dir, columns: 220, rows: 60, now: () => NOW, onQuit });
+  const { store, element } = createTui({ api, dataDir: dir, columns: 400, rows: 60, now: () => NOW, onQuit });
   const screen = render(element);
-  // A fake stdout has 100 columns; set 220, as a terminal resize does, so both panes show.
-  Object.defineProperty(screen.stdout, 'columns', { configurable: true, get: () => 220 });
+  // A fake stdout has 100 columns; set 400, as a terminal resize does, so both panes show.
+  Object.defineProperty(screen.stdout, 'columns', { configurable: true, get: () => 400 });
   screen.stdout.emit('resize');
   return { ...screen, store, onQuit, frame: () => screen.lastFrame() ?? '' };
 }
@@ -82,18 +82,18 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** The frame line of a zone row: the border, the selection and mark markers, then the zone name. */
 function rowLine(frame: string, zone: string): string | undefined {
-  const pattern = new RegExp(`^│[> ][● ]${escape(zone)}\\s`);
+  const pattern = new RegExp(`^│ [> ][● ]${escape(zone)}\\s`);
   return frame.split('\n').find((l) => pattern.test(l));
 }
 
 /** The frame text without borders, with each run of white space as one space. */
-const flat = (text: string) => text.replace(/[│┌┐└┘─]/g, ' ').replace(/\s+/g, ' ');
+const flat = (text: string) => text.replace(/[│┌┐└┘╭╮╰╯─]/g, ' ').replace(/\s+/g, ' ');
 
 /** The diff pane column of a two-pane frame: each line from the second top-border corner on. */
 function diffColumn(frame: string): string {
   const lines = frame.split('\n');
-  const top = lines.find((l) => l.indexOf('┌') !== l.lastIndexOf('┌')) ?? '';
-  const at = top.lastIndexOf('┌');
+  const top = lines.find((l) => l.indexOf('╭') !== l.lastIndexOf('╭')) ?? '';
+  const at = top.lastIndexOf('╭');
   return lines.map((l) => l.slice(at)).join('\n');
 }
 
@@ -176,7 +176,8 @@ describe('TUI dry run and write', () => {
     await keys(screen, 'a');
     await vi.waitFor(() => expect(screen.frame()).toContain(prompt('example.com')));
     expect(screen.frame()).toContain('example.com plan (1 of 1)');
-    expect(screen.frame()).toContain(' CONFIRM ');
+    // CONFIRM shows the y/N keys in the hint line.
+    expect(screen.frame()).toContain('y apply this zone');
     expect(api.writes).toEqual([]);
     await keys(screen, 'y');
     await vi.waitFor(() => expect(screen.frame()).toContain('example.com: applied, read-back in sync'));
@@ -205,8 +206,8 @@ describe('TUI dry run and write', () => {
     seed(api, dir);
     const screen = await loadedScreen(api, dir);
     await keys(screen, ' ', 'j', 'j', ' ');
-    await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.org')).toMatch(/^│>●/));
-    expect(rowLine(screen.frame(), 'example.com')).toMatch(/^│ ●/);
+    await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.org')).toMatch(/^│ >●/));
+    expect(rowLine(screen.frame(), 'example.com')).toMatch(/^│  ●/);
     expect(screen.frame()).toContain('2 marked');
     await keys(screen, 'a');
     await vi.waitFor(() => expect(screen.frame()).toContain(prompt('example.com')));
@@ -216,7 +217,7 @@ describe('TUI dry run and write', () => {
     expect(screen.frame()).toContain('example.org plan (2 of 2)');
     await keys(screen, ESC);
     await vi.waitFor(() => expect(screen.frame()).toContain('example.org: declined, nothing sent'));
-    await vi.waitFor(() => expect(screen.frame()).toContain(' NORMAL '));
+    await vi.waitFor(() => expect(screen.frame()).toContain('q quit'));
     expect(api.writes.length).toBeGreaterThan(0);
     expect(api.writes.every((w) => w.zoneId === IDS.com)).toBe(true);
   });
@@ -233,7 +234,7 @@ describe('TUI dry run and write', () => {
     await vi.waitFor(() => expect(screen.frame()).toContain(prompt('example.org')));
     expect(screen.frame()).toContain('example.org plan (1 of 1)');
     await keys(screen, 'n');
-    await vi.waitFor(() => expect(screen.frame()).toContain(' NORMAL '));
+    await vi.waitFor(() => expect(screen.frame()).toContain('q quit'));
     expect(screen.frame()).not.toContain(prompt('example.com'));
     expect(api.writes).toEqual([]);
   });

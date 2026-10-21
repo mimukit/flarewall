@@ -7,7 +7,7 @@ import type { ZoneReport } from '../src/core/status.js';
 import { KEYMAP } from '../src/tui/keymap.js';
 import { applyOutcomeText, planLines } from '../src/cli/format.js';
 import type { ZonePlan } from '../src/core/apply.js';
-import { diffPaneLines, diffPaneTitle, initialState, markSummary, update, visibleRows, type Effect, type TuiData, type TuiEvent, type TuiState } from '../src/tui/state.js';
+import { canRun, diffPaneLines, diffPaneTitle, headerCounts, initialState, markSummary, planLabel, listWidth, rowCells, stateLabel, update, visibleRows, zoneCard, zonesPaneWidth, type Effect, type TuiData, type TuiEvent, type TuiState } from '../src/tui/state.js';
 import { defaultBaseline } from './helpers.js';
 
 const CUSTOM: Phase = 'http_request_firewall_custom';
@@ -76,7 +76,7 @@ const key = (k: string): TuiEvent => ({ type: 'key', key: k, ...(k.length === 1 
 const press = (state: TuiState, ...keys: string[]) => run(state, keys.map(key));
 const type = (state: TuiState, text: string) => run(state, [...text].map(key));
 
-/** A state with every zone loaded and reported. rows: 6 gives a body of 2 lines, so half a page is 1. */
+/** A state with every zone loaded and reported. rows: 11 gives a body of 2 lines, so half a page is 1. */
 function loaded(size: { columns?: number; rows?: number } = {}): TuiState {
   const inventories = ZONES.filter((z) => z !== 'e.example.com').map((z, i) => inventory(z, i + 1));
   const start = run(initialState({ dataDir: '/data', columns: size.columns ?? 200, rows: size.rows ?? 30 }), [{ type: 'start' }]);
@@ -133,8 +133,8 @@ describe('TUI reducer, NORMAL zones pane', () => {
   });
 
   it('ctrl-d and ctrl-u move half a page down or up', () => {
-    // rows 9: a body of 5 lines, so half a page is 2 zones.
-    const down = press(loaded({ rows: 9 }), 'ctrl-d').state;
+    // rows 14: a body of 5 lines, so half a page is 2 zones.
+    const down = press(loaded({ rows: 14 }), 'ctrl-d').state;
     expect(down.selected).toBe('c.example.com');
     expect(press(down, 'ctrl-u').state.selected).toBe('a.example.com');
   });
@@ -225,7 +225,7 @@ describe('TUI reducer, NORMAL zones pane', () => {
 
 describe('TUI reducer, NORMAL diff pane', () => {
   /** b.example.net, diff pane focused, body of 2 lines. */
-  const diff = () => press(select(loaded({ rows: 6 }), 'b.example.net'), 'l').state;
+  const diff = () => press(select(loaded({ rows: 11 }), 'b.example.net'), 'l').state;
 
   it('j and k scroll one line', () => {
     const s = press(diff(), 'j', 'j').state;
@@ -236,8 +236,8 @@ describe('TUI reducer, NORMAL diff pane', () => {
   });
 
   it('ctrl-d and ctrl-u scroll half a page', () => {
-    // rows 8: a body of 4 lines, so half a page is 2 lines.
-    const s = press(select(loaded({ rows: 8 }), 'b.example.net'), 'l', 'ctrl-d').state;
+    // rows 13: a body of 4 lines, so half a page is 2 lines.
+    const s = press(select(loaded({ rows: 13 }), 'b.example.net'), 'l', 'ctrl-d').state;
     expect(s.diffScroll).toBe(2);
     expect(press(s, 'ctrl-u').state.diffScroll).toBe(0);
   });
@@ -618,5 +618,90 @@ describe('TUI key map, Phase 3', () => {
     for (const k of ['zones space', 'zones ctrl-a', 'zones ctrl-x', 'zones d', 'zones a', 'diff d', 'diff a', 'confirm y', 'confirm n', 'confirm enter', 'confirm esc', 'running j', 'running k']) {
       expect(keys).toContain(k);
     }
+  });
+});
+
+/** The diff pane lines under the zone card, which ends with a blank line. */
+function body(state: TuiState): string[] {
+  const lines = diffPaneLines(state);
+  return lines.slice(lines.findIndex((l) => l.label === undefined) + 1).map((l) => l.text);
+}
+
+describe('TUI screen helpers', () => {
+  it('gives the zones pane 75% of the window, keeps the diff pane at 50 columns or more, and never cuts the list', () => {
+    expect(zonesPaneWidth(loaded({ columns: 400 }))).toBe(300);
+    expect(zonesPaneWidth(loaded({ columns: 160 }))).toBe(110);
+    const list = listWidth(loaded());
+    expect(zonesPaneWidth(loaded({ columns: list + 50 }))).toBe(list);
+  });
+
+  it('shows a mark before each state word', () => {
+    expect(['in sync', 'drift', 'legacy', 'error', 'not managed', 'loading'].map(stateLabel)).toEqual(['✓ in sync', '▲ drift', '◆ legacy', '✗ error', '○ not managed', '… loading']);
+  });
+
+  it('puts the zone card above the diff: the plan, the zone ID, and the inventory facts', () => {
+    const row = loaded().zones.find((r) => r.zone === 'b.example.net');
+    if (row === undefined) throw new Error('no row');
+    expect(zoneCard(row)).toEqual([
+      { label: 'Plan', text: 'free' },
+      { label: 'Zone ID', text: ID(2) },
+      { label: 'API hosts', text: '-' },
+      { label: 'WP hosts', text: '-' },
+      { label: 'Geo', text: 'off' },
+      { label: 'Redirect', text: 'root' },
+      { text: '' },
+    ]);
+    expect(diffPaneLines(select(loaded(), 'b.example.net')).slice(0, 7)).toEqual(zoneCard(row));
+    expect(zoneCard(loaded().zones.find((r) => r.zone === 'e.example.com') ?? { zone: '', plan: '' }).map((l) => l.label)).toEqual(['Plan', 'Zone ID', undefined]);
+  });
+
+  it('shows the plan as its short name, as in the sketch', () => {
+    expect(['Free Website', 'Pro Website', 'Business Website', 'Enterprise Website', ''].map(planLabel)).toEqual(['free', 'pro', 'business', 'enterprise', '']);
+    expect(rowCells(loaded().zones.find((r) => r.zone === 'd.example.net') ?? { zone: '', plan: '' })[1]).toBe('business');
+  });
+
+  it('counts every state in the header, and not managed only when a zone has it', () => {
+    expect(headerCounts(loaded())).toEqual([
+      { word: 'in sync', count: 1 },
+      { word: 'drift', count: 1 },
+      { word: 'legacy', count: 1 },
+      { word: 'error', count: 1 },
+      { word: 'not managed', count: 1 },
+    ]);
+    const managed = { ...loaded(), zones: loaded().zones.filter((r) => r.zone !== 'e.example.com') };
+    expect(headerCounts(managed).map((c) => c.word)).toEqual(['in sync', 'drift', 'legacy', 'error']);
+  });
+
+  it('drops the head line that repeats the pane title, and keeps the error text', () => {
+    expect(body(select(loaded(), 'c.example.com'))[0]).toMatch(/^ {2}http_request_firewall_custom: legacy/);
+    expect(body(select(loaded(), 'a.example.com'))).toEqual(['No changes.']);
+    expect(body(select(loaded(), 'd.example.net'))[0]).toBe('d.example.net: error: getPhase failed: 403');
+  });
+
+  it('shows the next step for a not managed zone', () => {
+    expect(body(select(loaded(), 'e.example.com'))).toEqual(['No inventory entry for this zone.', 'Run flarewall add e.example.com to manage it.']);
+  });
+
+  it('shows the empty state when no zone has an inventory entry', () => {
+    const s = loaded();
+    const none = select({ ...s, zones: s.zones.map(({ inventory: _, ...r }) => ({ ...r, report: { zone: r.zone, plan: r.plan, state: 'not managed' as const } })) }, 'a.example.com');
+    expect(headerCounts(none)).toContainEqual({ word: 'not managed', count: 5 });
+    expect(body(none)).toEqual([
+      'No inventory entry for this zone.',
+      'Run flarewall add a.example.com to manage it.',
+      '',
+      'No zone has an inventory entry: 0 of 5 zones are managed.',
+      'Run flarewall add <zone> for each zone you want to manage, then press R.',
+    ]);
+  });
+
+  it('canRun is false when d and a would skip every target zone', () => {
+    expect(canRun(select(loaded(), 'b.example.net'))).toBe(true);
+    expect(canRun(select(loaded(), 'e.example.com'))).toBe(false);
+    expect(canRun(select(loaded(), 'd.example.net'))).toBe(false);
+    const skipped = press(select(loaded(), 'e.example.com'), 'space', 'k', 'space').state;
+    expect(skipped.marks).toEqual(['e.example.com', 'd.example.net']);
+    expect(canRun(skipped)).toBe(false);
+    expect(canRun(press(skipped, 'k', 'k', 'space').state)).toBe(true);
   });
 });
