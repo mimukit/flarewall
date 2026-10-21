@@ -7,7 +7,7 @@ import type { ZoneReport } from '../src/core/status.js';
 import { KEYMAP } from '../src/tui/keymap.js';
 import { applyOutcomeText, planLines } from '../src/cli/format.js';
 import type { ZonePlan } from '../src/core/apply.js';
-import { canAdd, canRun, diffPaneLines, diffPaneTitle, listNotice, headerCounts, initialState, markSummary, planLabel, listWidth, rowCells, stateLabel, update, visibleRows, zoneCard, zonesPaneWidth, type Effect, type TuiData, type TuiEvent, type TuiState } from '../src/tui/state.js';
+import { outcomeText, canAdd, canRun, diffPaneLines, diffPaneTitle, listNotice, headerCounts, initialState, markSummary, planLabel, listWidth, rowCells, stateLabel, update, visibleRows, zoneCard, zonesPaneWidth, type Effect, type TuiData, type TuiEvent, type TuiState } from '../src/tui/state.js';
 import { defaultBaseline } from './helpers.js';
 
 const CUSTOM: Phase = 'http_request_firewall_custom';
@@ -427,7 +427,7 @@ describe('TUI reducer, d dry run', () => {
       { type: 'plan-ready', zone: 'b.example.net', plan: PLAN_B },
       { type: 'zone-done', zone: 'b.example.net', outcome: 'dry run' },
     ]);
-    expect(paneText(done.state)).toEqual([...planLines(PLAN_B), `b.example.net: ${applyOutcomeText('dry run')}`]);
+    expect(paneText(done.state)).toEqual([...planLines(PLAN_B), `b.example.net: ${outcomeText('dry run')}`]);
     expect(done.state.mode).toEqual({ kind: 'normal' });
     expect(done.effects).toEqual([]);
   });
@@ -642,10 +642,25 @@ describe('TUI reducer, + add', () => {
     expect(paneText(r.state)).toEqual(['e.example.com: wrote /data/inventory/x/e.example.com.yaml; put each host in hosts.api or hosts.wordpress, then press R']);
   });
 
-  it('a failed add shows its error', () => {
+  it('a failed add shows its error, and the zone stays selected through the reload', () => {
     const s = press(select(loaded(), 'e.example.com'), '+').state;
     const r = run(s, [{ type: 'add-failed', zone: 'e.example.com', error: 'zone e.example.com not found: the token cannot see it' }, { type: 'adds-done' }]);
     expect(paneText(r.state)).toEqual(['e.example.com: error: zone e.example.com not found: the token cannot see it']);
+    const gen = r.state.gen;
+    const inventories = ZONES.filter((z) => z !== 'e.example.com').map((z, i) => inventory(z, i + 1));
+    const read = run(r.state, [{ type: 'data-loaded', gen, data: { baseline: defaultBaseline(), inventories } }]).state;
+    expect(read.selected).toBe('e.example.com');
+    const listed = run(read, [{ type: 'zones-listed', gen, zones: ZONES.map((z, i) => ({ id: ID(i + 1), name: z, accountId: ID(99), plan: PLANS[z] ?? '' })) }]).state;
+    expect(listed.selected).toBe('e.example.com');
+    expect(paneText(listed)).toEqual(['e.example.com: error: zone e.example.com not found: the token cannot see it']);
+  });
+
+  it('ctrl-c during an add waits for the add to end, then quits with no reload', () => {
+    const s = press(select(loaded(), 'e.example.com'), '+').state;
+    const r = press(s, 'ctrl-c');
+    expect(r.effects).toEqual([]);
+    const end = run(r.state, [{ type: 'zone-added', zone: 'e.example.com', path: '/data/x.yaml' }, { type: 'adds-done' }]);
+    expect(end.effects).toEqual([{ kind: 'quit' }]);
   });
 
   it('esc does not stop an add, and d, a, r, and R wait for it', () => {
@@ -653,6 +668,36 @@ describe('TUI reducer, + add', () => {
     const r = press(s, 'esc', 'd', 'a', 'r', 'R', '+');
     expect(r.effects).toEqual([]);
     expect(r.state.mode).toEqual({ kind: 'running' });
+  });
+});
+
+describe('TUI reducer, review fixes', () => {
+  it('a failed zone list marks each row still loading as error, so d and a skip it', () => {
+    const s = press(loaded(), 'R').state;
+    const read = run(s, [{ type: 'data-loaded', gen: s.gen, data: s.data as TuiData }]).state;
+    const failed = run(read, [{ type: 'load-failed', gen: s.gen, error: 'error: 403 Authentication error' }]).state;
+    expect(failed.zones.every((r) => r.report?.state === 'error')).toBe(true);
+    expect(failed.error).toBe('error: 403 Authentication error');
+    expect(failed.loading).toBeUndefined();
+    expect(press(select(failed, 'b.example.net'), 'd').effects).toEqual([]);
+  });
+
+  it('drops data-loaded and zones-listed from an earlier load', () => {
+    const s = press(loaded(), 'R').state;
+    const stale = run(s, [
+      { type: 'data-loaded', gen: s.gen - 1, data: { baseline: defaultBaseline(), inventories: [] } },
+      { type: 'zones-listed', gen: s.gen - 1, zones: [{ id: ID(50), name: 'z.example.com', accountId: ID(99), plan: 'Free Website' }] },
+    ]).state;
+    expect(stale.zones).toEqual(s.zones);
+  });
+
+  it('a written zone stays in view under a state filter while it refreshes', () => {
+    let s = run(loaded(), [key('f'), key('f')]).state; // state: drift
+    expect(names(s)).toEqual(['b.example.net']);
+    s = run(s, [key('a'), { type: 'confirm-asked', zone: 'b.example.net' }, key('y'), { type: 'backup-written', zone: 'b.example.net', path: '/data/backups/b' }, { type: 'zone-done', zone: 'b.example.net', outcome: 'applied' }]).state;
+    expect(names(s)).toEqual(['b.example.net']);
+    expect(s.selected).toBe('b.example.net');
+    expect(paneText(s)).toContain('b.example.net: backup written to /data/backups/b');
   });
 });
 

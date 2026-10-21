@@ -40,12 +40,14 @@ export function createTui(options: TuiOptions): { store: Store; element: ReactEl
   return { store, element: <App store={store} {...(options.rows === undefined ? {} : { rows: options.rows })} /> };
 }
 
-/** Runs the TUI until the owner quits, and returns the exit code: 2 when a write failed, else 0. */
-export async function startTui(options: { api: CloudflareApi; dataDir: string }): Promise<number> {
+/** Runs the TUI until the owner quits, then exits the process: 2 when a write failed, else 0. */
+export async function startTui(options: { api: CloudflareApi; dataDir: string }): Promise<never> {
   let quit = () => {};
   const { store, element } = createTui({ ...options, columns: process.stdout.columns ?? 80, onQuit: () => quit() });
   const instance = render(element, { exitOnCtrlC: false, alternateScreen: true });
   quit = () => instance.unmount();
   await instance.waitUntilExit();
-  return tuiExitCode(store.getState());
+  // A load or a refresh still in flight would keep Node running after the screen closes. No write
+  // is in flight here: a quit waits for the zone being written, and for an add, to end.
+  process.exit(tuiExitCode(store.getState()));
 }

@@ -153,8 +153,3 @@ export function isPrefix(scopes: readonly Scope[], seq: string): boolean {
 export function hintBindings(scopes: readonly Scope[]): Binding[] {
   return scopes.flatMap((scope) => KEYMAP.filter((b) => b.scope === scope && b.hint !== undefined));
 }
-
-/** The hint line for the scopes: each hinted binding of the mode's scope, then the `any` ones. */
-export function hints(scopes: readonly Scope[]): string[] {
-  return hintBindings(scopes).map((b) => b.hint as string);
-}

@@ -144,19 +144,19 @@ describe('TUI add', () => {
     const api = new FakeCloudflareApi();
     seed(api, dir);
     api.addZone({
-      summary: { id: '2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f', name: 'example.edu', accountId: ACCOUNT, plan: PLAN },
-      dns: [{ type: 'A', name: 'www.example.edu', content: '192.0.2.10', proxied: true }],
+      summary: { id: '2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f', name: 'new.example.com', accountId: ACCOUNT, plan: PLAN },
+      dns: [{ type: 'A', name: 'www.new.example.com', content: '192.0.2.10', proxied: true }],
     });
     const screen = await loadedScreen(api, dir);
-    await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.edu')).toMatch(/not managed/));
-    // The list sorts by name: example.com, then example.edu.
-    await keys(screen, 'g', 'g', 'j');
+    await vi.waitFor(() => expect(rowLine(screen.frame(), 'new.example.com')).toMatch(/not managed/));
+    // The list sorts by name: example.com, example.net, example.org, then new.example.com.
+    await keys(screen, 'G');
     expect(flat(screen.frame())).toContain('Press + to add it');
     await keys(screen, '+');
-    const path = join(dir, 'inventory', ACCOUNT, 'example.edu.yaml');
-    await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.edu')).not.toMatch(/not managed|loading/));
-    expect(readFileSync(path, 'utf8')).toContain('#   www.example.edu');
-    expect(flat(diffColumn(screen.frame()))).toContain(`example.edu: wrote ${path}`);
+    const path = join(dir, 'inventory', ACCOUNT, 'new.example.com.yaml');
+    await vi.waitFor(() => expect(rowLine(screen.frame(), 'new.example.com')).not.toMatch(/not managed|loading/));
+    expect(readFileSync(path, 'utf8')).toContain('#   www.new.example.com');
+    expect(flat(diffColumn(screen.frame()))).toContain(`new.example.com: wrote ${path}`);
   });
 });
 

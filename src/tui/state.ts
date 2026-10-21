@@ -91,7 +91,7 @@ export interface TuiState {
   /** The dry run or write text per zone. It shows in the diff pane until the next `r` or `R`. */
   runLines: Record<string, string[]>;
   /** The add in flight: the zones it writes an inventory entry for, and the result lines so far. */
-  adding?: { zones: string[]; lines: Record<string, string[]> };
+  adding?: { zones: string[]; lines: Record<string, string[]>; quit: boolean };
   /** True once a write in this session failed; the TUI then exits 2. */
   writeFailed: boolean;
 }
@@ -187,11 +187,15 @@ function matchesState(row: Row, filter: StateFilter): boolean {
   return filter === 'problems' ? PROBLEMS.includes(word) : word === filter;
 }
 
-/** The rows the list shows: the name filter and the state filter applied, in the sort order. */
+/**
+ * The rows the list shows: the name filter and the state filter applied, in the sort order. A zone
+ * with run text stays in view under any state filter, so its outcome and backup path do not vanish
+ * when the zone shows `loading` after a write.
+ */
 export function visibleRows(state: TuiState): Row[] {
   const text = state.filterText.toLowerCase();
   return state.zones
-    .filter((r) => r.zone.toLowerCase().includes(text) && matchesState(r, state.stateFilter))
+    .filter((r) => r.zone.toLowerCase().includes(text) && (state.runLines[r.zone] !== undefined || matchesState(r, state.stateFilter)))
     .sort(COMPARE[state.sort]);
 }
 
@@ -567,7 +571,7 @@ function startAdd(state: TuiState): Update {
   const zones = addTargets(state);
   if (zones.length === 0) return none(state);
   const focus = isNarrow(state) ? 'diff' : state.focus;
-  return { state: { ...state, focus, mode: { kind: 'running' }, adding: { zones, lines: {} } }, effects: [{ kind: 'add-zones', zones }] };
+  return { state: { ...state, focus, mode: { kind: 'running' }, adding: { zones, lines: {}, quit: false } }, effects: [{ kind: 'add-zones', zones }] };
 }
 
 function onAdded(state: TuiState, zone: string, line: string): TuiState {
@@ -581,6 +585,7 @@ function onAddsDone(state: TuiState): Update {
   const adding = state.adding;
   if (adding === undefined) return none(state);
   const { adding: _done, ...rest } = state;
+  if (adding.quit) return { state: { ...rest, mode: { kind: 'normal' } }, effects: [{ kind: 'quit' }] };
   const reloaded = load({ ...rest, mode: { kind: 'normal' } });
   return { state: { ...reloaded.state, runLines: adding.lines }, effects: reloaded.effects };
 }
@@ -632,6 +637,11 @@ function answer(state: TuiState, yes: boolean, stop: boolean, quit: boolean): Up
   return { state: { ...state, run: next, mode: { kind: 'running' } }, effects: [{ kind: 'confirm-answer', yes }] };
 }
 
+/** The outcome line. The CLI's dry run line names `--write`; the TUI names its own key. */
+export function outcomeText(outcome: ApplyResult['outcome']): string {
+  return outcome === 'dry run' ? 'dry run, nothing sent; press a to apply' : applyOutcomeText(outcome);
+}
+
 /** The current zone ended: show its outcome, refresh it after a write, then go on. */
 function onZoneEnd(state: TuiState, event: Extract<TuiEvent, { type: 'zone-done' | 'zone-failed' }>): Update {
   const run = state.run;
@@ -646,7 +656,7 @@ function onZoneEnd(state: TuiState, event: Extract<TuiEvent, { type: 'zone-done'
     };
     return advance(next, done, []);
   }
-  const next = addLine(state, event.zone, `${event.zone}: ${applyOutcomeText(event.outcome)}`);
+  const next = addLine(state, event.zone, `${event.zone}: ${outcomeText(event.outcome)}`);
   if (run.write && event.outcome === 'applied') {
     const refreshed = refreshZone(next, event.zone);
     return advance(refreshed.state, done, refreshed.effects);
@@ -662,6 +672,8 @@ function act(state: TuiState, action: Action): Update {
     case 'quit':
       if (state.mode.kind === 'confirm') return answer(state, false, true, true);
       if (state.run !== undefined) return none({ ...state, run: { ...state.run, stop: true, quit: true } });
+      // An add in flight writes its files first, as a write finishes its zone first.
+      if (state.adding !== undefined) return none({ ...state, adding: { ...state.adding, quit: true } });
       return { state, effects: [{ kind: 'quit' }] };
     case 'cancel':
       if (state.help) return none({ ...state, help: false });
@@ -793,6 +805,12 @@ function onReport(state: TuiState, report: ZoneReport): TuiState {
   return settle(report.zone === state.selected ? scrollTo(next, state.diffScroll) : next);
 }
 
+/** A failed load: the error goes to the top line, and each row still waiting for a report shows the error, so `d` and `a` skip it. */
+function onLoadFailed(state: TuiState, error: string): TuiState {
+  const zones = state.zones.map((r) => (r.report !== undefined ? r : { ...r, report: { zone: r.zone, plan: r.plan, state: 'error' as const, error, ...(r.zoneId === undefined ? {} : { zoneId: r.zoneId }) } }));
+  return settle({ ...withoutLoading(state), zones, error });
+}
+
 function withoutLoading(state: TuiState): TuiState {
   const { loading: _done, ...rest } = state;
   return rest;
@@ -809,14 +827,17 @@ export function update(state: TuiState, event: TuiEvent): Update {
     case 'data-loaded': {
       if (event.gen !== state.gen) return none(state);
       const { error: _drop, ...rest } = state;
-      return none(settle({ ...rest, loading: 'zones', data: event.data, zones: rowsFromData(state, event.data) }));
+      const next = settle({ ...rest, loading: 'zones', data: event.data, zones: rowsFromData(state, event.data) });
+      // A not managed zone has no row until the zones are listed; keep it selected until then.
+      const keep = state.selected !== undefined && !next.zones.some((r) => r.zone === state.selected);
+      return none(keep ? { ...next, selected: state.selected, diffScroll: state.diffScroll } : next);
     }
     case 'zones-listed':
       return none(event.gen === state.gen ? onZonesListed(withoutLoading(state), event.zones) : state);
     case 'report':
       return none(event.gen === state.gen ? onReport(state, event.report) : state);
     case 'load-failed':
-      return none(event.gen === state.gen ? { ...withoutLoading(state), error: event.error } : state);
+      return none(event.gen === state.gen ? onLoadFailed(state, event.error) : state);
     case 'plan-ready': {
       const lines = planLines(event.plan);
       return none(state.run === undefined ? state : setLines(state, event.zone, lines));
