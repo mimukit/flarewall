@@ -36,14 +36,14 @@ describe('flarewall init', () => {
   it('refuses to overwrite an existing baseline', async () => {
     writeFileSync(join(dir, 'baseline.yaml'), 'mine\n');
     const c = capture();
-    expect(await run(['init', '--data', dir], {}, c.io)).toBe(1);
+    expect(await run(['init', '--data', dir], {}, c.io)).toBe(2);
     expect(readFileSync(join(dir, 'baseline.yaml'), 'utf8')).toBe('mine\n');
     expect(c.err.join('\n')).toMatch(/already exists/);
   });
 
   it('fails with no data path', async () => {
     const c = capture();
-    expect(await run(['init'], {}, c.io)).toBe(1);
+    expect(await run(['init'], {}, c.io)).toBe(2);
     expect(c.err.join('\n')).toMatch(/FLAREWALL_DATA/);
   });
 
