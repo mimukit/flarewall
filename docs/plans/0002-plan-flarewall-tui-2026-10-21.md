@@ -37,7 +37,7 @@ Success: the owner opens `flarewall tui`, sees every inventory zone with the sta
 | Loading | `flarewall tui` is a new case in `run.ts`. It loads Ink and React with a dynamic `import()`, so the other commands never load them. |
 | Dependencies | `ink@8.0.0` and `react` 19.3 or later, pinned exactly. `ink-testing-library@4.0.0` and `@types/react` as dev dependencies. `tsconfig.json` gets `"jsx": "react-jsx"`, and `vitest.config.ts` includes `test/**/*.test.tsx`. |
 | Tests | Vitest. The reducer gets plain unit tests, one per key map row. The screens get frame tests with `ink-testing-library`: send key presses, check the last frame. Both use `test/fake-api.ts` and `example.com` fixtures. Tests sit in `test/` beside the CLI tests. |
-| UI house rules | The repo has no `DESIGN.md`. The rules for this plan, all new: the state words and colours are fixed (`in sync` green, `drift` yellow, `legacy` magenta, `error` red, `not managed` grey); every state also shows as a word, so colour is never the only signal; the key hint line always names the keys of the current mode. |
+| UI house rules | The repo has no `DESIGN.md`. The rules for this plan, all new: the state words and colours are fixed (`in sync` green, `drift` yellow, `legacy` pink, `error` red, `not managed` subtext0 grey, all from the Catppuccin Mocha palette in `src/tui/theme.ts`, which holds every TUI colour); every state also shows as a word, so colour is never the only signal; the key hint line always names the keys of the current mode. |
 
 ## Approach
 
