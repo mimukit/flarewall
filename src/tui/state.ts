@@ -1,7 +1,8 @@
 // The TUI state and its pure reducer: update(state, event) => { state, effects }.
 // Events are key presses and data events. Effects are requests (load, refresh a zone, quit) that
 // the runner in main.tsx carries out; their results come back as data events. No I/O here.
-import { zoneDiffLines, type DiffLine } from '../cli/format.js';
+import { applyOutcomeText, planLines, zoneDiffLines, type DiffLine } from '../cli/format.js';
+import type { ApplyResult, ZonePlan } from '../core/apply.js';
 import type { ZoneSummary } from '../core/api.js';
 import type { ZoneState } from '../core/diff.js';
 import type { Baseline, Inventory } from '../core/schema.js';
@@ -11,11 +12,23 @@ import { isPrefix, lookup, type Action, type Scope } from './keymap.js';
 export type Focus = 'zones' | 'diff';
 
 /**
- * The input mode. Phase 3 adds `confirm` (one y/N prompt per write zone) and `running` (API
- * calls in flight) as new kinds here; the help overlay is the separate `help` flag, so it can
- * open over any mode.
+ * The input mode: `confirm` is the y/N prompt of one write zone, `running` means API calls are in
+ * flight. The help overlay is the separate `help` flag, so it can open over any mode.
  */
-export type Mode = { kind: 'normal' } | { kind: 'filter' };
+export type Mode = { kind: 'normal' } | { kind: 'filter' } | { kind: 'confirm'; zone: string } | { kind: 'running' };
+
+/** A dry run (`d`) or a write (`a`) over a list of zones, one zone at a time. */
+export interface RunState {
+  write: boolean;
+  /** Every zone the run covers, in order; `(i of n)` counts them. */
+  zones: string[];
+  /** The index in `zones` of the zone in flight. */
+  index: number;
+  /** Set by `esc` or `ctrl-c`: no zone after the current one starts. */
+  stop: boolean;
+  /** Set by `ctrl-c`: quit when the current zone ends. */
+  quit: boolean;
+}
 
 export const STATE_FILTERS = ['all', 'problems', 'drift', 'legacy', 'error', 'not managed'] as const;
 export type StateFilter = (typeof STATE_FILTERS)[number];
@@ -64,15 +77,25 @@ export interface TuiState {
   pending: string;
   /** A load or parse error for the header, as `<file>: <error>`. */
   error?: string;
+  /** Marked zone names. A mark stays when a filter hides its zone. */
+  marks: string[];
+  /** The run in flight, if any. */
+  run?: RunState;
+  /** The dry run or write text per zone. It shows in the diff pane until the next `r` or `R`. */
+  runLines: Record<string, string[]>;
+  /** True once a write in this session failed; the TUI then exits 2. */
+  writeFailed: boolean;
 }
 
 /**
  * Requests the runner carries out. `gen` ties the answers to the load that asked for them.
- * Phase 3 adds dry-run and apply effects here.
+ * `apply-zone` runs applyInventoryZone on one zone; `confirm-answer` answers its y/N prompt.
  */
 export type Effect =
   | { kind: 'load'; gen: number }
   | { kind: 'refresh-zone'; gen: number; zone: string; data: TuiData }
+  | { kind: 'apply-zone'; zone: string; write: boolean; data: TuiData }
+  | { kind: 'confirm-answer'; yes: boolean }
   | { kind: 'quit' };
 
 export type TuiEvent =
@@ -83,7 +106,13 @@ export type TuiEvent =
   | { type: 'data-loaded'; gen: number; data: TuiData }
   | { type: 'zones-listed'; gen: number; zones: ZoneSummary[] }
   | { type: 'report'; gen: number; report: ZoneReport }
-  | { type: 'load-failed'; gen: number; error: string };
+  | { type: 'load-failed'; gen: number; error: string }
+  /** The answers of an `apply-zone` effect, in the order applyZone produces them. */
+  | { type: 'plan-ready'; zone: string; plan: ZonePlan }
+  | { type: 'confirm-asked'; zone: string }
+  | { type: 'backup-written'; zone: string; path: string }
+  | { type: 'zone-done'; zone: string; outcome: ApplyResult['outcome'] }
+  | { type: 'zone-failed'; zone: string; error: string };
 
 export interface Update {
   state: TuiState;
@@ -106,6 +135,9 @@ export function initialState(options: { dataDir: string; columns: number; rows: 
     showForeign: true,
     showValues: false,
     pending: '',
+    marks: [],
+    runLines: {},
+    writeFailed: false,
   };
 }
 
@@ -205,10 +237,46 @@ export function isNarrow(state: TuiState): boolean {
   return state.columns < listWidth(state) + MIN_DIFF_WIDTH;
 }
 
-/** The diff pane text of the selected zone. An error zone shows its error text. */
+/** The header text for the marks, such as `2 marked, 1 hidden`; undefined with no mark. */
+export function markSummary(state: TuiState): string | undefined {
+  if (state.marks.length === 0) return undefined;
+  const visible = new Set(visibleRows(state).map((r) => r.zone));
+  const hidden = state.marks.filter((z) => !visible.has(z)).length;
+  return hidden === 0 ? `${state.marks.length} marked` : `${state.marks.length} marked, ${hidden} hidden`;
+}
+
+/** The exit code on quit: 2 when a write in the session failed, else 0. */
+export function tuiExitCode(state: TuiState): number {
+  return state.writeFailed ? 2 : 0;
+}
+
+/** The y/N prompt for one write zone, the same question the CLI asks. */
+export function confirmPrompt(zone: string): string {
+  return `Apply the baseline to ${zone}? [y/N]`;
+}
+
+/** The diff pane title: the zone, and `plan (i of n)` while the zone has run text. */
+export function diffPaneTitle(state: TuiState): string {
+  const row = selectedRow(state);
+  if (row === undefined) return 'No zone';
+  if (state.runLines[row.zone] === undefined) return row.zone;
+  const run = state.run;
+  const at = run === undefined ? -1 : run.zones.indexOf(row.zone);
+  return run === undefined || at === -1 ? `${row.zone} plan` : `${row.zone} plan (${at + 1} of ${run.zones.length})`;
+}
+
+/**
+ * The diff pane text of the selected zone: its dry run or write text when it has one (with the
+ * prompt in CONFIRM), else its diff. An error zone shows its error text.
+ */
 export function diffPaneLines(state: TuiState): DiffLine[] {
   const row = selectedRow(state);
   if (row === undefined) return [];
+  const run = state.runLines[row.zone];
+  if (run !== undefined) {
+    const prompt = state.mode.kind === 'confirm' && state.mode.zone === row.zone ? [confirmPrompt(row.zone)] : [];
+    return [...run, ...prompt].map((text) => ({ text }));
+  }
   if (row.report === undefined) return [{ text: `${row.zone}: loading` }];
   return zoneDiffLines(row.report, { foreign: state.showForeign, values: state.showValues });
 }
@@ -221,6 +289,8 @@ function maxScroll(state: TuiState): number {
 export function scopes(state: TuiState): Scope[] {
   if (state.help) return ['any'];
   if (state.mode.kind === 'filter') return ['filter', 'any'];
+  if (state.mode.kind === 'confirm') return ['confirm', 'any'];
+  if (state.mode.kind === 'running') return ['running', 'any'];
   return [state.focus, 'any'];
 }
 
@@ -292,17 +362,127 @@ function setFilter(state: TuiState, filterText: string): TuiState {
   return settle({ ...state, filterText, listTop: 0 });
 }
 
+/** Drops a row's report, so it shows `loading`, and asks the runner to read the zone again. */
+function refreshZone(state: TuiState, zone: string): Update {
+  if (state.data === undefined) return none(state);
+  const zones = state.zones.map((r) => {
+    if (r.zone !== zone) return r;
+    const { report: _drop, ...loading } = r;
+    return loading;
+  });
+  return { state: { ...state, zones }, effects: [{ kind: 'refresh-zone', gen: state.gen, zone, data: state.data }] };
+}
+
+function withoutRunLines(state: TuiState, zone?: string): TuiState {
+  if (zone === undefined) return { ...state, runLines: {} };
+  const { [zone]: _drop, ...rest } = state.runLines;
+  return { ...state, runLines: rest };
+}
+
 function refreshSelected(state: TuiState): Update {
   const row = selectedRow(state);
   if (row === undefined || state.data === undefined) return none(state);
-  const { report: _drop, ...loading } = row;
-  const zones = state.zones.map((r) => (r === row ? loading : r));
-  return { state: { ...state, zones }, effects: [{ kind: 'refresh-zone', gen: state.gen, zone: row.zone, data: state.data }] };
+  return refreshZone(withoutRunLines(state, row.zone), row.zone);
 }
 
 function load(state: TuiState): Update {
   const gen = state.gen + 1;
-  return { state: { ...state, gen }, effects: [{ kind: 'load', gen }] };
+  return { state: { ...withoutRunLines(state), gen }, effects: [{ kind: 'load', gen }] };
+}
+
+// ---- Dry run and write ----
+
+function toggleMark(state: TuiState): TuiState {
+  const zone = state.selected;
+  if (zone === undefined) return state;
+  return { ...state, marks: state.marks.includes(zone) ? state.marks.filter((z) => z !== zone) : [...state.marks, zone] };
+}
+
+function markAll(state: TuiState): TuiState {
+  const add = visibleRows(state).map((r) => r.zone).filter((z) => !state.marks.includes(z));
+  return { ...state, marks: [...state.marks, ...add] };
+}
+
+/** The zones `d` or `a` act on: the visible marked zones in list order, else the selected zone. */
+function runTargets(state: TuiState): string[] {
+  if (state.focus === 'diff' || state.marks.length === 0) return state.selected === undefined ? [] : [state.selected];
+  return visibleRows(state).map((r) => r.zone).filter((z) => state.marks.includes(z));
+}
+
+/** Why a zone is skipped: no inventory entry, or an error state. Undefined when it can run. */
+function skipLine(row: Row | undefined, zone: string): string | undefined {
+  if (row?.inventory === undefined || row.report?.state === 'not managed') return `${zone}: skipped, not managed; run flarewall add ${zone}`;
+  if (row.report?.state === 'error') return `${zone}: skipped: ${row.report.error ?? ''}`;
+  return undefined;
+}
+
+function setLines(state: TuiState, zone: string, lines: string[]): TuiState {
+  return { ...state, runLines: { ...state.runLines, [zone]: lines } };
+}
+
+function addLine(state: TuiState, zone: string, line: string): TuiState {
+  return setLines(state, zone, [...(state.runLines[zone] ?? []), line]);
+}
+
+/**
+ * Starts the zone at `run.index` or the next one that can run; skipped zones get their skip line.
+ * With no zone left (or after a stop), the run ends, and a `ctrl-c` during the run quits.
+ */
+function advance(state: TuiState, run: RunState, effects: Effect[]): Update {
+  let next = state;
+  for (let i = run.index; !run.stop && i < run.zones.length; i += 1) {
+    const zone = run.zones[i] as string;
+    const row = next.zones.find((r) => r.zone === zone);
+    const skip = skipLine(row, zone);
+    if (skip !== undefined) {
+      next = setLines(next, zone, [skip]);
+      continue;
+    }
+    if (next.data === undefined) break;
+    next = { ...withoutRunLines(next, zone), run: { ...run, index: i }, mode: { kind: 'running' } };
+    next = settle({ ...next, selected: zone, diffScroll: next.selected === zone ? next.diffScroll : 0 });
+    return { state: next, effects: [...effects, { kind: 'apply-zone', zone, write: run.write, data: next.data as TuiData }] };
+  }
+  const { run: _done, ...rest } = next;
+  return { state: { ...rest, mode: { kind: 'normal' } }, effects: run.quit ? [...effects, { kind: 'quit' }] : effects };
+}
+
+function startRun(state: TuiState, write: boolean): Update {
+  if (state.mode.kind !== 'normal' || state.data === undefined) return none(state);
+  const zones = runTargets(state);
+  if (zones.length === 0) return none(state);
+  const focus = isNarrow(state) ? 'diff' : state.focus;
+  return advance({ ...state, focus }, { write, zones, index: 0, stop: false, quit: false }, []);
+}
+
+/** Answers the open prompt. `stop` skips the zones after this one; `quit` also quits after it. */
+function answer(state: TuiState, yes: boolean, stop: boolean, quit: boolean): Update {
+  const run = state.run;
+  if (state.mode.kind !== 'confirm' || run === undefined) return none(state);
+  const next: RunState = { ...run, stop: run.stop || stop, quit: run.quit || quit };
+  return { state: { ...state, run: next, mode: { kind: 'running' } }, effects: [{ kind: 'confirm-answer', yes }] };
+}
+
+/** The current zone ended: show its outcome, refresh it after a write, then go on. */
+function onZoneEnd(state: TuiState, event: Extract<TuiEvent, { type: 'zone-done' | 'zone-failed' }>): Update {
+  const run = state.run;
+  if (run === undefined || run.zones[run.index] !== event.zone) return none(state);
+  const done = { ...run, index: run.index + 1 };
+  if (event.type === 'zone-failed') {
+    let next = addLine(state, event.zone, `${event.zone}: error: ${event.error}`);
+    next = {
+      ...next,
+      writeFailed: state.writeFailed || run.write,
+      zones: next.zones.map((r) => (r.zone === event.zone ? { ...r, report: { zone: r.zone, plan: r.plan, state: 'error', error: event.error, ...(r.zoneId === undefined ? {} : { zoneId: r.zoneId }) } } : r)),
+    };
+    return advance(next, done, []);
+  }
+  const next = addLine(state, event.zone, `${event.zone}: ${applyOutcomeText(event.outcome)}`);
+  if (run.write && event.outcome === 'applied') {
+    const refreshed = refreshZone(next, event.zone);
+    return advance(refreshed.state, done, refreshed.effects);
+  }
+  return advance(next, done, []);
 }
 
 function act(state: TuiState, action: Action): Update {
@@ -311,9 +491,13 @@ function act(state: TuiState, action: Action): Update {
     case 'help':
       return none({ ...state, help: !state.help });
     case 'quit':
+      if (state.mode.kind === 'confirm') return answer(state, false, true, true);
+      if (state.run !== undefined) return none({ ...state, run: { ...state.run, stop: true, quit: true } });
       return { state, effects: [{ kind: 'quit' }] };
     case 'cancel':
-      return none(state.help ? { ...state, help: false } : { ...state, mode: { kind: 'normal' } });
+      if (state.help) return none({ ...state, help: false });
+      if (state.run !== undefined) return none({ ...state, run: { ...state.run, stop: true } });
+      return none({ ...state, mode: { kind: 'normal' } });
     case 'down':
       return none(diff ? scrollTo(state, state.diffScroll + 1) : selectIndex(state, selectedIndex(state) + 1));
     case 'up':
@@ -371,6 +555,22 @@ function act(state: TuiState, action: Action): Update {
       return none(setFilter(state, ''));
     case 'filter-text':
       return none(state);
+    case 'mark':
+      return none(toggleMark(state));
+    case 'mark-all':
+      return none(markAll(state));
+    case 'clear-marks':
+      return none({ ...state, marks: [] });
+    case 'dry-run':
+      return startRun(state, false);
+    case 'apply':
+      return startRun(state, true);
+    case 'confirm-yes':
+      return answer(state, true, false, false);
+    case 'confirm-no':
+      return answer(state, false, false, false);
+    case 'confirm-stop':
+      return answer(state, false, true, false);
   }
 }
 
@@ -439,5 +639,17 @@ export function update(state: TuiState, event: TuiEvent): Update {
       return none(event.gen === state.gen ? onReport(state, event.report) : state);
     case 'load-failed':
       return none(event.gen === state.gen ? { ...state, error: event.error } : state);
+    case 'plan-ready': {
+      const lines = planLines(event.plan);
+      return none(state.run === undefined ? state : setLines(state, event.zone, lines));
+    }
+    case 'confirm-asked':
+      if (state.run === undefined) return none(state);
+      return none(settle({ ...state, mode: { kind: 'confirm', zone: event.zone }, selected: event.zone, help: false }));
+    case 'backup-written':
+      return none(state.run === undefined ? state : addLine(state, event.zone, `${event.zone}: backup written to ${event.path}`));
+    case 'zone-done':
+    case 'zone-failed':
+      return onZoneEnd(state, event);
   }
 }

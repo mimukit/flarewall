@@ -6,11 +6,14 @@ import { hints, KEYMAP, SCOPE_TITLES, type Scope } from './keymap.js';
 import {
   bodyHeight,
   columnWidths,
+  confirmPrompt,
   diffPaneLines,
+  diffPaneTitle,
   isNarrow,
   LIST_HEADERS,
   listHeight,
   listWidth,
+  markSummary,
   rowCells,
   hintScopes,
   selectedRow,
@@ -42,6 +45,7 @@ export function keyEvent(input: string, key: Key): TuiEvent | undefined {
   if (key.escape) return named('esc');
   if (key.tab) return named(key.shift ? 'shift-tab' : 'tab');
   if (key.backspace || key.delete) return named('backspace');
+  if (input === ' ') return { type: 'key', key: 'space', text: ' ' };
   if (input === '' || key.ctrl || key.meta) return undefined;
   return { type: 'key', key: input, text: input };
 }
@@ -102,6 +106,7 @@ function Header({ state }: { state: TuiState }) {
     ...(loading > 0 ? [`${loading} loading`] : []),
     `filter: ${state.stateFilter}${state.filterText === '' ? '' : ` /${state.filterText}`}`,
     `sort: ${state.sort}`,
+    ...(markSummary(state) === undefined ? [] : [markSummary(state) as string]),
   ];
   return (
     <Box flexDirection="column">
@@ -130,7 +135,8 @@ function ZonesPane({ state, width }: { state: TuiState; width: number }) {
         const selected = row.zone === state.selected;
         return (
           <Text key={row.zone} wrap="truncate-end" bold={selected}>
-            {selected ? '> ' : '  '}
+            {selected ? '>' : ' '}
+            {state.marks.includes(row.zone) ? '●' : ' '}
             {zone}
             {'  '}
             {plan}
@@ -149,7 +155,7 @@ function DiffPane({ state, width }: { state: TuiState; width: number }) {
   const row = selectedRow(state);
   const lines = diffPaneLines(state).slice(state.diffScroll, state.diffScroll + bodyHeight(state));
   return (
-    <Pane title={row?.zone ?? 'No zone'} {...(row === undefined ? {} : { word: stateWord(row) })} width={width} height={bodyHeight(state)} focused={state.focus === 'diff'}>
+    <Pane title={diffPaneTitle(state)} {...(row === undefined || state.runLines[row.zone] !== undefined ? {} : { word: stateWord(row) })} width={width} height={bodyHeight(state)} focused={state.focus === 'diff'}>
       {lines.map((line, i) => (
         <Text key={`${state.diffScroll + i}`} wrap="wrap">
           {line.text}
@@ -160,7 +166,7 @@ function DiffPane({ state, width }: { state: TuiState; width: number }) {
 }
 
 function HelpPane({ state }: { state: TuiState }) {
-  const groups: Scope[] = ['any', 'zones', 'diff', 'filter'];
+  const groups: Scope[] = ['any', 'zones', 'diff', 'filter', 'confirm', 'running'];
   const keys = (list: readonly string[]) => (list.length === 0 ? 'text' : list.join('/'));
   const width = Math.max(...KEYMAP.map((b) => keys(b.keys).length));
   return (
@@ -183,14 +189,15 @@ function HelpPane({ state }: { state: TuiState }) {
 }
 
 function HintLine({ state }: { state: TuiState }) {
-  const mode = state.help ? 'HELP' : state.mode.kind === 'filter' ? 'FILTER' : 'NORMAL';
+  const mode = state.help ? 'HELP' : state.mode.kind.toUpperCase();
   const filter = state.mode.kind === 'filter' && !state.help ? `/${state.filterText}_  ` : '';
+  const ask = state.mode.kind === 'confirm' && !state.help ? `${confirmPrompt(state.mode.zone)}  ` : '';
   return (
     <Text wrap="truncate-end">
       <Text inverse bold>
         {` ${mode} `}
       </Text>
-      {`  ${filter}${hints(hintScopes(state)).join('  ')}`}
+      {`  ${filter}${ask}${hints(hintScopes(state)).join('  ')}`}
     </Text>
   );
 }

@@ -148,13 +148,13 @@ RUNNING, while API calls run:
 | `j`, `k`, `?` | Still move the selection and open help |
 | `d`, `a`, `r`, `R` | Ignored until the run ends |
 
-### Phase 1: share the CLI text and the apply step
+### Phase 1: share the CLI text and the apply step (built 2026-10-21)
 
 Move the line formatters and the apply outcome text from `src/cli/run.ts` to `src/cli/format.ts`. Move the per-zone apply body to `applyInventoryZone` in `src/core/apply.ts`. Add the optional `{ onReport }` argument to `statusAll`. `run.ts` calls all three, and its output stays the same byte for byte.
 
 Done when: `pnpm test` and `pnpm typecheck` pass with no change to any existing CLI test or snapshot, `run.ts` holds no formatter, and a new status test shows `onReport` called once for each report that `statusAll` returns, with the same reports.
 
-### Phase 2: read-only TUI
+### Phase 2: read-only TUI (built 2026-10-21)
 
 Add the `tui` command with a lazy Ink import, the dependencies, and the JSX config. Build the reducer and layout A with all eight list columns, the progressive load, the narrow terminal mode, the NORMAL, FILTER, and help keys, the diff pane keys, and `r` and `R` with the reload rule. Add the alternate screen, the no-TTY refusal, and `exitOnCtrlC: false`. A zone with an `error` state shows its error text in the diff pane.
 
@@ -167,7 +167,7 @@ Done when: these tests pass on the fake client.
 - A reducer test passes for each NORMAL, FILTER, and diff pane row of the key map.
 - A test shows that `run(['status'])` does not load `ink`.
 
-### Phase 3: dry run and write
+### Phase 3: dry run and write (built 2026-10-21)
 
 Add `space`, `ctrl-a`, `ctrl-x`, `d`, `a`, CONFIRM mode, RUNNING mode, the skipped-zone lines, the write error display, and the `ctrl-c` rule. After a write, the TUI refreshes that zone and shows the backup path and the outcome text.
 

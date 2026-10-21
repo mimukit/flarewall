@@ -3,10 +3,11 @@
 import { render } from 'ink';
 import type { ReactElement } from 'react';
 import type { CloudflareApi } from '../core/api.js';
+import { createBackupWriter } from '../node/backup.js';
 import { loadData } from '../node/data.js';
 import { App } from './app.js';
 import { createRunner } from './runner.js';
-import { initialState, type TuiData } from './state.js';
+import { initialState, tuiExitCode, type TuiData } from './state.js';
 import { createStore, type Store } from './store.js';
 
 export interface TuiOptions {
@@ -18,6 +19,8 @@ export interface TuiOptions {
   columns: number;
   /** A fixed terminal height. Default: the terminal height, followed on resize. */
   rows?: number;
+  /** The clock for backup directory names. Default: the system clock. */
+  now?: () => Date;
   onQuit: () => void;
 }
 
@@ -25,17 +28,23 @@ export interface TuiOptions {
 export function createTui(options: TuiOptions): { store: Store; element: ReactElement } {
   const store = createStore(
     initialState({ dataDir: options.dataDir, columns: options.columns, rows: options.rows ?? 24 }),
-    createRunner({ api: options.api, dataDir: options.dataDir, load: options.load ?? loadData, onQuit: options.onQuit }),
+    createRunner({
+      api: options.api,
+      dataDir: options.dataDir,
+      load: options.load ?? loadData,
+      backup: createBackupWriter(options.dataDir, options.now),
+      onQuit: options.onQuit,
+    }),
   );
   return { store, element: <App store={store} {...(options.rows === undefined ? {} : { rows: options.rows })} /> };
 }
 
-/** Runs the TUI until the owner quits, and returns the exit code. */
+/** Runs the TUI until the owner quits, and returns the exit code: 2 when a write failed, else 0. */
 export async function startTui(options: { api: CloudflareApi; dataDir: string }): Promise<number> {
   let quit = () => {};
-  const { element } = createTui({ ...options, columns: process.stdout.columns ?? 80, onQuit: () => quit() });
+  const { store, element } = createTui({ ...options, columns: process.stdout.columns ?? 80, onQuit: () => quit() });
   const instance = render(element, { exitOnCtrlC: false, alternateScreen: true });
   quit = () => instance.unmount();
   await instance.waitUntilExit();
-  return 0;
+  return tuiExitCode(store.getState());
 }

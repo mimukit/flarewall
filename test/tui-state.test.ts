@@ -5,7 +5,9 @@ import type { Phase } from '../src/core/render.js';
 import { parseInventory, type Inventory } from '../src/core/schema.js';
 import type { ZoneReport } from '../src/core/status.js';
 import { KEYMAP } from '../src/tui/keymap.js';
-import { diffPaneLines, initialState, update, visibleRows, type Effect, type TuiEvent, type TuiState } from '../src/tui/state.js';
+import { applyOutcomeText, planLines } from '../src/cli/format.js';
+import type { ZonePlan } from '../src/core/apply.js';
+import { diffPaneLines, diffPaneTitle, initialState, markSummary, update, visibleRows, type Effect, type TuiData, type TuiEvent, type TuiState } from '../src/tui/state.js';
 import { defaultBaseline } from './helpers.js';
 
 const CUSTOM: Phase = 'http_request_firewall_custom';
@@ -368,6 +370,252 @@ describe('TUI key map', () => {
   it('names every Phase 2 key in the help table', () => {
     const keys = new Set(KEYMAP.flatMap((b) => b.keys.map((k) => `${b.scope} ${k}`)));
     for (const k of ['any ?', 'any ctrl-c', 'any esc', 'zones j', 'zones gg', 'zones ]', 'zones /', 'zones f', 'zones s', 'zones R', 'zones q', 'diff }', 'diff z', 'diff e', 'filter ctrl-w']) {
+      expect(keys).toContain(k);
+    }
+  });
+});
+
+// ---- Phase 3: marks, dry run, write, CONFIRM, RUNNING ----
+
+const PLAN_B: ZonePlan = {
+  zone: 'b.example.net',
+  phases: [],
+  settings: [{ id: 'always_use_https', live: 'off', want: 'on' }],
+  limitErrors: [],
+  hasWrites: true,
+};
+const PLAN_C: ZonePlan = { ...PLAN_B, zone: 'c.example.com' };
+const paneText = (state: TuiState) => diffPaneLines(state).map((l) => l.text);
+const applyEffect = (state: TuiState, zone: string, write: boolean): Effect => ({ kind: 'apply-zone', zone, write, data: state.data as TuiData });
+const marked = (zones: string[]) => ({ ...loaded(), marks: zones });
+
+describe('TUI reducer, marks', () => {
+  it('space marks or unmarks the selected zone', () => {
+    const s = press(loaded(), 'j', 'space').state;
+    expect(s.marks).toEqual(['b.example.net']);
+    expect(press(s, 'space').state.marks).toEqual([]);
+  });
+
+  it('ctrl-a marks every visible zone, and ctrl-x clears every mark', () => {
+    const s = run(loaded(), [...[...'/net'].map(key), key('enter'), key('ctrl-a')]).state;
+    expect([...s.marks].sort()).toEqual(['b.example.net', 'd.example.net']);
+    const cleared = run(s, [...[...'/'].map(key), key('esc'), key('ctrl-x')]).state;
+    expect(cleared.marks).toEqual([]);
+  });
+
+  it('marks stay when a filter hides a zone, and the summary names the hidden marks', () => {
+    const s = press(loaded(), 'space', 'j', 'space').state;
+    expect(markSummary(s)).toBe('2 marked');
+    const filtered = run(s, [...[...'/net'].map(key), key('enter')]).state;
+    expect(filtered.marks).toEqual(['a.example.com', 'b.example.net']);
+    expect(markSummary(filtered)).toBe('2 marked, 1 hidden');
+    expect(markSummary(loaded())).toBeUndefined();
+  });
+});
+
+describe('TUI reducer, d dry run', () => {
+  it('d runs the selected zone with write off when no zone is marked', () => {
+    const s = select(loaded(), 'b.example.net');
+    const { state, effects } = press(s, 'd');
+    expect(effects).toEqual([applyEffect(s, 'b.example.net', false)]);
+    expect(state.mode).toEqual({ kind: 'running' });
+  });
+
+  it('d shows the planLines text and the outcome text, then goes back to NORMAL', () => {
+    const s = press(select(loaded(), 'b.example.net'), 'd').state;
+    const done = run(s, [
+      { type: 'plan-ready', zone: 'b.example.net', plan: PLAN_B },
+      { type: 'zone-done', zone: 'b.example.net', outcome: 'dry run' },
+    ]);
+    expect(paneText(done.state)).toEqual([...planLines(PLAN_B), `b.example.net: ${applyOutcomeText('dry run')}`]);
+    expect(done.state.mode).toEqual({ kind: 'normal' });
+    expect(done.effects).toEqual([]);
+  });
+
+  it('d runs the visible marked zones in list order and skips not managed and error zones', () => {
+    const s = marked(['e.example.com', 'b.example.net', 'd.example.net']);
+    const first = press(s, 'd');
+    expect(first.effects).toEqual([applyEffect(s, 'b.example.net', false)]);
+    const done = run(first.state, [{ type: 'zone-done', zone: 'b.example.net', outcome: 'no change' }]);
+    expect(done.effects).toEqual([]);
+    expect(done.state.mode).toEqual({ kind: 'normal' });
+    expect(paneText(select(done.state, 'd.example.net'))).toEqual(['d.example.net: skipped: getPhase failed: 403']);
+    expect(paneText(select(done.state, 'e.example.com'))).toEqual(['e.example.com: skipped, not managed; run flarewall add e.example.com']);
+  });
+
+  it('d in the diff pane runs the selected zone only, even with marks', () => {
+    const s = { ...select(loaded(), 'c.example.com'), marks: ['b.example.net'] };
+    expect(press(s, 'l', 'd').effects).toEqual([applyEffect(s, 'c.example.com', false)]);
+  });
+
+  it('d skips the marked zones that a filter hides', () => {
+    const s = run(marked(['a.example.com', 'b.example.net']), [...[...'/net'].map(key), key('enter')]).state;
+    expect(press(s, 'd').effects).toEqual([applyEffect(s, 'b.example.net', false)]);
+  });
+});
+
+describe('TUI reducer, a write and CONFIRM', () => {
+  /** a on b.example.net, its plan on screen, and the prompt open. */
+  const confirming = () =>
+    run(press(select(loaded(), 'b.example.net'), 'a').state, [
+      { type: 'plan-ready', zone: 'b.example.net', plan: PLAN_B },
+      { type: 'confirm-asked', zone: 'b.example.net' },
+    ]).state;
+
+  it('a runs the selected zone with write on', () => {
+    const s = select(loaded(), 'b.example.net');
+    const { state, effects } = press(s, 'a');
+    expect(effects).toEqual([applyEffect(s, 'b.example.net', true)]);
+    expect(state.mode).toEqual({ kind: 'running' });
+  });
+
+  it('the confirm callback opens CONFIRM with the plan and the prompt on screen', () => {
+    const s = confirming();
+    expect(s.mode).toEqual({ kind: 'confirm', zone: 'b.example.net' });
+    expect(paneText(s)).toEqual([...planLines(PLAN_B), 'Apply the baseline to b.example.net? [y/N]']);
+    expect(diffPaneTitle(s)).toBe('b.example.net plan (1 of 1)');
+  });
+
+  it('y in CONFIRM answers yes and goes to RUNNING', () => {
+    const { state, effects } = press(confirming(), 'y');
+    expect(effects).toEqual([{ kind: 'confirm-answer', yes: true }]);
+    expect(state.mode).toEqual({ kind: 'running' });
+  });
+
+  it.each(['n', 'enter'])('%s in CONFIRM answers no', (k) => {
+    const { state, effects } = press(confirming(), k);
+    expect(effects).toEqual([{ kind: 'confirm-answer', yes: false }]);
+    expect(state.mode).toEqual({ kind: 'running' });
+  });
+
+  it('other keys in CONFIRM do nothing', () => {
+    const s = confirming();
+    const { state, effects } = press(s, 'd', 'a', 'j', 'q');
+    expect(effects).toEqual([]);
+    expect(state.mode).toEqual(s.mode);
+    expect(state.selected).toBe('b.example.net');
+  });
+
+  it('esc in CONFIRM answers no and skips the remaining zones', () => {
+    const s = marked(['b.example.net', 'c.example.com']);
+    let r = run(press(s, 'a').state, [
+      { type: 'plan-ready', zone: 'b.example.net', plan: PLAN_B },
+      { type: 'confirm-asked', zone: 'b.example.net' },
+    ]);
+    expect(diffPaneTitle(r.state)).toBe('b.example.net plan (1 of 2)');
+    r = run(r.state, [key('y'), { type: 'zone-done', zone: 'b.example.net', outcome: 'applied' }]);
+    expect(r.effects).toEqual([
+      { kind: 'confirm-answer', yes: true },
+      { kind: 'refresh-zone', gen: s.gen, zone: 'b.example.net', data: s.data },
+      applyEffect(s, 'c.example.com', true),
+    ]);
+    expect(r.state.selected).toBe('c.example.com');
+    r = run(r.state, [{ type: 'plan-ready', zone: 'c.example.com', plan: PLAN_C }, { type: 'confirm-asked', zone: 'c.example.com' }]);
+    expect(diffPaneTitle(r.state)).toBe('c.example.com plan (2 of 2)');
+    const stop = press(r.state, 'esc');
+    expect(stop.effects).toEqual([{ kind: 'confirm-answer', yes: false }]);
+    const end = run(stop.state, [{ type: 'zone-done', zone: 'c.example.com', outcome: 'declined' }]);
+    expect(end.effects).toEqual([]);
+    expect(end.state.mode).toEqual({ kind: 'normal' });
+  });
+
+  it('esc in CONFIRM on the first of two zones never starts the second', () => {
+    const s = marked(['b.example.net', 'c.example.com']);
+    const r = run(s, [key('a'), { type: 'confirm-asked', zone: 'b.example.net' }, key('esc'), { type: 'zone-done', zone: 'b.example.net', outcome: 'declined' }]);
+    expect(r.effects).toEqual([applyEffect(s, 'b.example.net', true), { kind: 'confirm-answer', yes: false }]);
+    expect(r.state.mode).toEqual({ kind: 'normal' });
+  });
+
+  it('after a write, the row refreshes and the pane keeps the backup path and the outcome text', () => {
+    const s = confirming();
+    const r = run(s, [
+      key('y'),
+      { type: 'backup-written', zone: 'b.example.net', path: '/data/backups/b.example.net/20261021T081500Z' },
+      { type: 'zone-done', zone: 'b.example.net', outcome: 'applied' },
+    ]);
+    expect(r.state.zones.find((z) => z.zone === 'b.example.net')?.report).toBeUndefined();
+    expect(paneText(r.state)).toEqual([
+      ...planLines(PLAN_B),
+      'b.example.net: backup written to /data/backups/b.example.net/20261021T081500Z',
+      `b.example.net: ${applyOutcomeText('applied')}`,
+    ]);
+    expect(r.state.writeFailed).toBe(false);
+  });
+
+  it('a failed write shows the error and the backup path, marks the row error, and records the failure', () => {
+    const r = run(confirming(), [
+      key('y'),
+      { type: 'backup-written', zone: 'b.example.net', path: '/data/backups/b.example.net/20261021T081500Z' },
+      { type: 'zone-failed', zone: 'b.example.net', error: 'updatePhase failed: 403' },
+    ]);
+    expect(paneText(r.state)).toEqual([
+      ...planLines(PLAN_B),
+      'b.example.net: backup written to /data/backups/b.example.net/20261021T081500Z',
+      'b.example.net: error: updatePhase failed: 403',
+    ]);
+    expect(r.state.zones.find((z) => z.zone === 'b.example.net')?.report?.state).toBe('error');
+    expect(r.state.writeFailed).toBe(true);
+    expect(r.state.mode).toEqual({ kind: 'normal' });
+    expect(r.effects.filter((e) => e.kind === 'refresh-zone')).toEqual([]);
+    // r refreshes the row and drops the run text, so the diff shows again.
+    const refreshed = press(r.state, 'r').state;
+    expect(refreshed.runLines['b.example.net']).toBeUndefined();
+  });
+
+  it('a failed dry run does not count as a failed write', () => {
+    const s = press(select(loaded(), 'b.example.net'), 'd').state;
+    const r = run(s, [{ type: 'zone-failed', zone: 'b.example.net', error: 'skipped, over the Free plan limit' }]);
+    expect(r.state.writeFailed).toBe(false);
+    expect(r.state.zones.find((z) => z.zone === 'b.example.net')?.report?.state).toBe('error');
+  });
+});
+
+describe('TUI reducer, RUNNING', () => {
+  const running = () => press(select(loaded(), 'b.example.net'), 'd').state;
+
+  it('d, a, r, and R are ignored until the run ends', () => {
+    const s = running();
+    const r = press(s, 'd', 'a', 'r', 'R');
+    expect(r.effects).toEqual([]);
+    expect(r.state.gen).toBe(s.gen);
+    expect(r.state.mode).toEqual({ kind: 'running' });
+  });
+
+  it('j and k still move the selection, and ? opens help', () => {
+    const s = running();
+    expect(press(s, 'j').state.selected).toBe('c.example.com');
+    expect(press(s, 'k').state.selected).toBe('a.example.com');
+    expect(press(s, '?').state.help).toBe(true);
+  });
+
+  it('ctrl-c lets the current zone finish, then quits', () => {
+    const s = marked(['b.example.net', 'c.example.com']);
+    const r = run(s, [key('a'), { type: 'confirm-asked', zone: 'b.example.net' }, key('y'), key('ctrl-c')]);
+    expect(r.effects).toEqual([applyEffect(s, 'b.example.net', true), { kind: 'confirm-answer', yes: true }]);
+    const end = run(r.state, [{ type: 'zone-done', zone: 'b.example.net', outcome: 'applied' }]);
+    expect(end.effects).toEqual([{ kind: 'refresh-zone', gen: s.gen, zone: 'b.example.net', data: s.data }, { kind: 'quit' }]);
+  });
+
+  it('ctrl-c in CONFIRM acts as esc, then quits', () => {
+    const s = marked(['b.example.net', 'c.example.com']);
+    const r = run(s, [key('a'), { type: 'confirm-asked', zone: 'b.example.net' }, key('ctrl-c')]);
+    expect(r.effects).toEqual([applyEffect(s, 'b.example.net', true), { kind: 'confirm-answer', yes: false }]);
+    const end = run(r.state, [{ type: 'zone-done', zone: 'b.example.net', outcome: 'declined' }]);
+    expect(end.effects).toEqual([{ kind: 'quit' }]);
+  });
+
+  it('esc in RUNNING skips the remaining zones without quitting', () => {
+    const s = marked(['b.example.net', 'c.example.com']);
+    const r = run(s, [key('d'), key('esc'), { type: 'zone-done', zone: 'b.example.net', outcome: 'dry run' }]);
+    expect(r.effects).toEqual([applyEffect(s, 'b.example.net', false)]);
+    expect(r.state.mode).toEqual({ kind: 'normal' });
+  });
+});
+
+describe('TUI key map, Phase 3', () => {
+  it('names every Phase 3 key in the help table', () => {
+    const keys = new Set(KEYMAP.flatMap((b) => b.keys.map((k) => `${b.scope} ${k}`)));
+    for (const k of ['zones space', 'zones ctrl-a', 'zones ctrl-x', 'zones d', 'zones a', 'diff d', 'diff a', 'confirm y', 'confirm n', 'confirm enter', 'confirm esc', 'running j', 'running k']) {
       expect(keys).toContain(k);
     }
   });

@@ -2,7 +2,7 @@
 // so the help and the keys stay the same.
 
 /** Where a binding applies. `any` applies in every mode, after the mode's own bindings. */
-export type Scope = 'any' | 'zones' | 'diff' | 'filter';
+export type Scope = 'any' | 'zones' | 'diff' | 'filter' | 'confirm' | 'running';
 
 export type Action =
   | 'help'
@@ -34,7 +34,15 @@ export type Action =
   | 'filter-delete-char'
   | 'filter-delete-word'
   | 'filter-delete-all'
-  | 'filter-text';
+  | 'filter-text'
+  | 'mark'
+  | 'mark-all'
+  | 'clear-marks'
+  | 'dry-run'
+  | 'apply'
+  | 'confirm-yes'
+  | 'confirm-no'
+  | 'confirm-stop';
 
 export interface Binding {
   scope: Scope;
@@ -56,11 +64,13 @@ export const SCOPE_TITLES: Readonly<Record<Scope, string>> = {
   zones: 'NORMAL, zones pane',
   diff: 'NORMAL, diff pane',
   filter: 'FILTER',
+  confirm: 'CONFIRM, one prompt per zone',
+  running: 'RUNNING, while API calls run',
 };
 
 export const KEYMAP: readonly Binding[] = [
   { scope: 'any', keys: ['?'], action: 'help', help: 'Open or close the help overlay', hint: '? help' },
-  { scope: 'any', keys: ['ctrl-c'], action: 'quit', help: 'Quit' },
+  { scope: 'any', keys: ['ctrl-c'], action: 'quit', help: 'Quit. During a write, the current zone finishes first' },
   { scope: 'any', keys: ['esc'], action: 'cancel', help: 'Cancel the current mode and go back to NORMAL' },
 
   { scope: 'zones', keys: ['j', 'down'], action: 'down', help: 'Select the next zone', hint: 'j/k move' },
@@ -77,6 +87,11 @@ export const KEYMAP: readonly Binding[] = [
   { scope: 'zones', keys: ['N'], action: 'prev-match', help: 'Select the previous filter match' },
   { scope: 'zones', keys: ['f'], action: 'cycle-state-filter', help: 'Cycle the state filter: all, problems, drift, legacy, error, not managed', hint: 'f state' },
   { scope: 'zones', keys: ['s'], action: 'cycle-sort', help: 'Cycle the sort: zone, state, plan, changes', hint: 's sort' },
+  { scope: 'zones', keys: ['space'], action: 'mark', help: 'Mark or unmark the selected zone', hint: 'space mark' },
+  { scope: 'zones', keys: ['ctrl-a'], action: 'mark-all', help: 'Mark all visible zones' },
+  { scope: 'zones', keys: ['ctrl-x'], action: 'clear-marks', help: 'Clear every mark' },
+  { scope: 'zones', keys: ['d'], action: 'dry-run', help: 'Dry run on the marked zones, or the selected zone. The plan shows in the diff pane', hint: 'd dry run' },
+  { scope: 'zones', keys: ['a'], action: 'apply', help: 'Write on the marked zones, or the selected zone. Opens CONFIRM once per zone', hint: 'a apply' },
   { scope: 'zones', keys: ['r'], action: 'refresh', help: 'Refresh the selected zone', hint: 'r refresh' },
   { scope: 'zones', keys: ['R'], action: 'reload', help: 'Reload baseline.yaml, the inventory, and every zone', hint: 'R reload' },
   { scope: 'zones', keys: ['q'], action: 'quit', help: 'Quit', hint: 'q quit' },
@@ -92,6 +107,8 @@ export const KEYMAP: readonly Binding[] = [
   { scope: 'diff', keys: ['z'], action: 'toggle-foreign', help: 'Show or hide the unowned and legacy rules', hint: 'z unowned' },
   { scope: 'diff', keys: ['e'], action: 'toggle-values', help: 'Show or hide the live and wanted values of each changed field', hint: 'e values' },
   { scope: 'diff', keys: ['h', 'shift-tab', 'esc', 'tab'], action: 'focus-zones', help: 'Focus the zones pane', hint: 'h zones' },
+  { scope: 'diff', keys: ['d'], action: 'dry-run', help: 'Dry run on the selected zone', hint: 'd dry run' },
+  { scope: 'diff', keys: ['a'], action: 'apply', help: 'Write on the selected zone. Opens CONFIRM', hint: 'a apply' },
   { scope: 'diff', keys: ['r'], action: 'refresh', help: 'Refresh the selected zone', hint: 'r refresh' },
 
   { scope: 'filter', keys: [], action: 'filter-text', help: 'Type text to narrow the list on each key press', hint: 'type to filter' },
@@ -100,6 +117,14 @@ export const KEYMAP: readonly Binding[] = [
   { scope: 'filter', keys: ['backspace'], action: 'filter-delete-char', help: 'Delete one character' },
   { scope: 'filter', keys: ['ctrl-w'], action: 'filter-delete-word', help: 'Delete a word', hint: 'ctrl-w word' },
   { scope: 'filter', keys: ['ctrl-u'], action: 'filter-delete-all', help: 'Delete the whole filter', hint: 'ctrl-u all' },
+
+  { scope: 'confirm', keys: ['y'], action: 'confirm-yes', help: 'Back up, write, and read back this zone, then go to the next zone', hint: 'y apply this zone' },
+  { scope: 'confirm', keys: ['n', 'enter'], action: 'confirm-no', help: 'Skip this zone. The default is no', hint: 'n skip this zone' },
+  { scope: 'confirm', keys: ['esc'], action: 'confirm-stop', help: 'Stop the run and skip the remaining zones', hint: 'esc stop, skip the rest' },
+
+  { scope: 'running', keys: ['j', 'down'], action: 'down', help: 'Select the next zone; d, a, r, and R wait until the run ends', hint: 'j/k move' },
+  { scope: 'running', keys: ['k', 'up'], action: 'up', help: 'Select the previous zone' },
+  { scope: 'running', keys: ['esc'], action: 'cancel', help: 'Skip the remaining zones after the current one', hint: 'esc stop after this zone' },
 ];
 
 /** The first binding for `key` in the scopes, in scope order. */
