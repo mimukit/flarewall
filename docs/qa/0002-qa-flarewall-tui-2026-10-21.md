@@ -26,7 +26,7 @@ Set the data repo:
 export FLAREWALL_DATA=<path to the private data repo>
 ```
 
-- [ ] Environment ready
+- [x] Environment ready
 
 ## Test cases at a glance
 
@@ -49,7 +49,7 @@ Priority legend: 🔴 Critical · 🟡 Normal · 🟢 Low
 export CLOUDFLARE_API_TOKEN=<read-only token>
 ```
 
-- [ ] Setup complete
+- [x] Setup complete
 
 ### TC-1.1: The TUI shows the same states as `flarewall status`  ·  🔴 Critical
 
