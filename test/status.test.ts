@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { run } from '../src/cli/run.js';
 import { render, type Phase } from '../src/core/render.js';
 import { parseInventory } from '../src/core/schema.js';
+import { statusAll, type ZoneReport } from '../src/core/status.js';
 import { FakeCloudflareApi, liveFromDesired } from './fake-api.js';
 import { DEFAULT_BASELINE_FILE, defaultBaseline, legacyCase } from './helpers.js';
 
@@ -228,5 +229,24 @@ describe('errors (C10)', () => {
     const status = await cli('status');
     expect(status.code).toBe(2);
     expect(status.err).toContain('broken.yaml');
+  });
+});
+
+describe('statusAll onReport', () => {
+  it('calls onReport once for each report statusAll returns, with the same reports', async () => {
+    addLegacyZone();
+    addInSyncZone();
+    api.addZone({ summary: { id: IDS.org, name: 'example.org', accountId: ACCOUNT, plan: 'Free Website' } });
+    const inventories = [
+      parseInventory(readFileSync(join(import.meta.dirname, 'fixtures/legacy-script/no-hosts-www/inventory.yaml'), 'utf8')),
+      parseInventory(NET_INVENTORY),
+    ];
+    const seen: ZoneReport[] = [];
+    const reports = await statusAll(api, defaultBaseline(), inventories, ['example.com', 'example.net', 'example.org', 'missing.example.com'], {
+      onReport: (report) => seen.push(report),
+    });
+    expect(reports.map((r) => r.zone)).toEqual(['example.com', 'example.net', 'example.org', 'missing.example.com']);
+    expect(seen).toHaveLength(reports.length);
+    for (const report of reports) expect(seen.filter((r) => r === report)).toHaveLength(1);
   });
 });

@@ -14,7 +14,7 @@ Success: the owner opens `flarewall tui`, sees every inventory zone with the sta
 
 | Decision | Resolution |
 |----------|-----------|
-| Scope | Read and apply. The TUI shows status and diff for every zone, refreshes, dry-runs, and applies. `restore`, `add`, and `init` stay in the CLI. |
+| Scope | Read and apply. The TUI shows status and diff for every zone, refreshes, dry-runs, applies, and adds a zone with `+`. `restore` and `init` stay in the CLI. |
 | Screen sketch | Layout A, two panes: the zone list on the left, the diff or plan of the selected zone on the right, a header with counts per state, and a mode chip with key hints at the bottom. The owner approved it on 2026-10-21. [Screen sketch](#screen-sketch) holds the text form. |
 | Key map | Vim keys with the arrow keys as aliases, in the style of lazygit and zellij. Five modes: NORMAL, FILTER, CONFIRM, RUNNING, and the help overlay. The full map is in [Key map](#key-map). The owner approved every row on 2026-10-21, including marks, sort, and value detail. |
 | Write gate | No start flag. `a` starts a write on the marked zones, or on the selected zone when none is marked. Every write zone stops in CONFIRM mode for its own y/N prompt, and the default is no. There is no "yes to all" key. This keeps the CLI's per-zone confirmation. |
@@ -22,7 +22,7 @@ Success: the owner opens `flarewall tui`, sees every inventory zone with the sta
 | Interrupt | `ctrl-c` during a write lets the current zone finish its write and read-back, then quits. It never stops a zone between its backup and its read-back. |
 | Shared text | The line formatters in `src/cli/run.ts` (`statusLines`, `diffLines`, `planLines`, `stepLine`, `restoreLines`, `changeLine`, `foreignLine`) move to `src/cli/format.ts`. The CLI and the TUI both print them, so the two show the same words for one state. |
 | Shared apply step | The per-zone body of the `apply` loop in `run.ts` (render against live DNS, then `applyZone`) moves to `applyInventoryZone` in `src/core/apply.ts`. It uses no Node API. The outcome text moves to `src/cli/format.ts`. The CLI and the TUI both call them. |
-| Progressive load | `statusAll` takes an optional fifth argument `{ onReport }` and calls it once for each report, as each report is ready. The CLI does not pass it. The TUI draws the list at once from the inventory and one `listZones` call. Each row shows `loading` in its report columns until its report arrives. Zones are still read one after another, so the drift run's 429 back-off assumption holds. |
+| Progressive load | `statusAll` takes an optional fifth argument `{ onReport }` and calls it once for each report, as each report is ready. The CLI does not pass it. The TUI draws the list at once from the inventory and one `listZones` call. Each row shows `loading` in its report columns until its report arrives. Zones are still read one after another, so the drift run's 429 back-off assumption holds. While the list is empty, it shows a spinner and the load step: reading the data repo, then listing the zones. After the load, an empty list says why: no zone matches the filter, the load failed, or the token sees no zone. |
 | List columns | All columns, in this order: ZONE, PLAN, STATE, CHANGES, UNOWNED, HOSTS, GEO, REDIRECT. ZONE and PLAN come from `listZones`. HOSTS (the number of host roles), GEO (the country or `off`), and REDIRECT come from the inventory file, and they draw at once. STATE, CHANGES, and UNOWNED come from the report. A `not managed` zone shows `-` in the inventory columns. `s` cycles the sort through ZONE, STATE, PLAN, and CHANGES. |
 | Narrow terminal | The TUI shows both panes when the terminal fits the list and a diff pane of at least 50 columns, about 130 columns with all columns. Below that, it shows one pane at a time, `tab` switches between them, and the header shows `1/2` or `2/2`. The key map stays the same. |
 | Reload | `R` reloads `baseline.yaml`, the inventory files, and the live state of every zone. A parse error shows in red in the header as `<file>: <error>`, and the TUI keeps the last good data. `r` reloads the live state of the selected zone only. |
@@ -30,14 +30,15 @@ Success: the owner opens `flarewall tui`, sees every inventory zone with the sta
 | Marks and filters | Marks stay when a filter hides a zone. `d` and `a` act only on visible marked zones. The header shows `<n> marked, <m> hidden` when a mark is hidden. |
 | `ctrl-c` | Ink starts with `exitOnCtrlC: false`, and the reducer handles `ctrl-c`. During a write, the current zone finishes its write and read-back, then the TUI quits. With the CONFIRM prompt open, `ctrl-c` acts as `esc`, then quits. |
 | Terminal | The TUI uses the alternate screen and restores the terminal on quit. With no TTY on stdin, `flarewall tui` prints an error and exits 2. It exits 0 on quit, or 2 when a write in the session failed. |
-| Skipped zones | `d` and `a` skip a `not managed` zone with the line `run flarewall add <zone>`, and skip an `error` zone with its error text. |
+| Skipped zones | `d` and `a` skip a `not managed` zone with the line `press + to add it`, and skip an `error` zone with its error text. |
+| Add | `+` writes the inventory entry of each marked `not managed` zone, or of the selected one, with the same `addZone` step as `flarewall add`. It writes a local file only and sends no Cloudflare write, so it opens no CONFIRM prompt. The TUI then reloads, and the diff pane shows the path of each new file until the next `r` or `R`. The owner asked for this key on 2026-10-21. |
 | Write errors | When `applyInventoryZone` throws, the diff pane shows the error and the backup path when one exists. The row shows `error` until the next `r` or `R`. |
 | Help overlay | The overlay comes from the same key table that the reducer reads, so the help and the keys stay the same. |
 | TUI state | A pure reducer in `src/tui/state.ts` takes the state and a key and returns the new state. Ink components in `src/tui/` render the state and send keys to the reducer. No Cloudflare call and no rule logic sits in a component. |
 | Loading | `flarewall tui` is a new case in `run.ts`. It loads Ink and React with a dynamic `import()`, so the other commands never load them. |
 | Dependencies | `ink@8.0.0` and `react` 19.3 or later, pinned exactly. `ink-testing-library@4.0.0` and `@types/react` as dev dependencies. `tsconfig.json` gets `"jsx": "react-jsx"`, and `vitest.config.ts` includes `test/**/*.test.tsx`. |
 | Tests | Vitest. The reducer gets plain unit tests, one per key map row. The screens get frame tests with `ink-testing-library`: send key presses, check the last frame. Both use `test/fake-api.ts` and `example.com` fixtures. Tests sit in `test/` beside the CLI tests. |
-| UI house rules | The repo has no `DESIGN.md`. The rules for this plan, all new: the state words and colours are fixed (`in sync` green, `drift` yellow, `legacy` magenta, `error` red, `not managed` grey); every state also shows as a word, so colour is never the only signal; the key hint line always names the keys of the current mode. |
+| UI house rules | The repo has no `DESIGN.md`. The rules for this plan, all new: the state words and colours are fixed (`in sync` green, `drift` yellow, `legacy` pink, `error` red, `not managed` subtext0 grey, all from the Catppuccin Mocha palette in `src/tui/theme.ts`, which holds every TUI colour); every state also shows as a word, so colour is never the only signal; the key hint line always names the keys of the current mode. |
 
 ## Approach
 
@@ -107,6 +108,7 @@ NORMAL, zones pane:
 | `space` | Mark or unmark the selected zone |
 | `ctrl-a`, `ctrl-x` | Mark all visible zones, or clear every mark |
 | `r`, `R` | Refresh the selected zone, or refresh all zones |
+| `+` | Write the inventory entry of each marked `not managed` zone, or of the selected one, then reload |
 | `d` | Dry run on the marked zones, or the selected zone. The plan shows in the diff pane |
 | `a` | Write on the marked zones, or the selected zone. Opens CONFIRM once per zone |
 | `q` | Quit |
@@ -122,7 +124,7 @@ NORMAL, diff pane:
 | `z` | Show or hide the unowned and legacy rules |
 | `e` | Show or hide the live and wanted values of each changed field |
 | `h` / `shift-tab` / `esc` | Focus the zones pane |
-| `d`, `a`, `r` | As in the zones pane, for the selected zone |
+| `+`, `d`, `a`, `r` | As in the zones pane, for the selected zone |
 
 FILTER:
 
@@ -146,15 +148,15 @@ RUNNING, while API calls run:
 | Key | Action |
 |-----|--------|
 | `j`, `k`, `?` | Still move the selection and open help |
-| `d`, `a`, `r`, `R` | Ignored until the run ends |
+| `+`, `d`, `a`, `r`, `R` | Ignored until the run or the add ends |
 
-### Phase 1: share the CLI text and the apply step
+### Phase 1: share the CLI text and the apply step (built 2026-10-21)
 
 Move the line formatters and the apply outcome text from `src/cli/run.ts` to `src/cli/format.ts`. Move the per-zone apply body to `applyInventoryZone` in `src/core/apply.ts`. Add the optional `{ onReport }` argument to `statusAll`. `run.ts` calls all three, and its output stays the same byte for byte.
 
 Done when: `pnpm test` and `pnpm typecheck` pass with no change to any existing CLI test or snapshot, `run.ts` holds no formatter, and a new status test shows `onReport` called once for each report that `statusAll` returns, with the same reports.
 
-### Phase 2: read-only TUI
+### Phase 2: read-only TUI (built 2026-10-21)
 
 Add the `tui` command with a lazy Ink import, the dependencies, and the JSX config. Build the reducer and layout A with all eight list columns, the progressive load, the narrow terminal mode, the NORMAL, FILTER, and help keys, the diff pane keys, and `r` and `R` with the reload rule. Add the alternate screen, the no-TTY refusal, and `exitOnCtrlC: false`. A zone with an `error` state shows its error text in the diff pane.
 
@@ -167,7 +169,7 @@ Done when: these tests pass on the fake client.
 - A reducer test passes for each NORMAL, FILTER, and diff pane row of the key map.
 - A test shows that `run(['status'])` does not load `ink`.
 
-### Phase 3: dry run and write
+### Phase 3: dry run and write (built 2026-10-21)
 
 Add `space`, `ctrl-a`, `ctrl-x`, `d`, `a`, CONFIRM mode, RUNNING mode, the skipped-zone lines, the write error display, and the `ctrl-c` rule. After a write, the TUI refreshes that zone and shows the backup path and the outcome text.
 
@@ -192,7 +194,7 @@ None. The grill on 2026-10-21 settled every question.
 
 ## Non-goals
 
-- `restore`, `add`, and `init` in the TUI.
+- `restore` and `init` in the TUI.
 - Mouse input, themes, and a key map the owner can edit.
 - Writing a token to a file, or a token prompt in the TUI. The token comes from `CLOUDFLARE_API_TOKEN` only.
 - Opening the Cloudflare dashboard or copying to the clipboard. The box is headless.

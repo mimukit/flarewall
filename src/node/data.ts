@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CloudflareApi } from '../core/api.js';
-import { parseBaseline, parseInventory, SchemaError, type Baseline, type Inventory } from '../core/schema.js';
+import { parseBaseline, parseInventory, type Baseline, type Inventory } from '../core/schema.js';
 
 /** Path of the default baseline shipped with the package (src/baseline or dist/baseline). */
 export const DEFAULT_BASELINE_PATH = fileURLToPath(new URL('../baseline/default.yaml', import.meta.url));
@@ -71,7 +71,8 @@ async function readYaml<T>(path: string, parse: (text: string) => T, missingHint
   try {
     return parse(text);
   } catch (error) {
-    if (error instanceof SchemaError) throw new DataError(`${path}: ${error.message}`);
+    // A schema error or a YAML syntax error: either way the message names the file.
+    if (error instanceof Error) throw new DataError(`${path}: ${error.message}`);
     throw error;
   }
 }

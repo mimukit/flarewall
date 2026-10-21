@@ -28,6 +28,7 @@ npm install -g flarewall
 | `flarewall status [zone...]` | Prints one row per zone: name, plan, and state (`in sync`, `drift`, `legacy`, `not managed`, or `error`). Covers every zone by default. |
 | `flarewall diff [zone...]` | Prints the changes per zone, plus the unowned and legacy rules. Covers every zone by default. |
 | `flarewall apply <zone...>` or `flarewall apply --all` | Sends the rendered baseline to the zones. Without `--write` it is a dry run that prints what it would send. |
+| `flarewall tui` | Opens the terminal UI: every zone's state and diff on one screen, with dry run, apply, and add keys. Press `?` for the keys. It needs a terminal. |
 | `flarewall restore <zone> <backup-dir>` | Sends a backup back to a zone. Without `--write` it is a dry run that prints what it would send. `<backup-dir>` is a path, or a directory name under `<data>/backups/<zone>/`. |
 
 Flags:
@@ -48,10 +49,11 @@ Backups go to `<data>/backups/<zone>/<UTC time>/`, for example `20261021T081500Z
 | `status`, `diff` | every zone in sync or not managed | a zone has drift or legacy rules | an error, such as an API failure or a bad data file |
 | `apply`, `restore` | every zone succeeded or was declined | not used | a zone failed (limit, API error, read-back mismatch), or a usage error |
 | `init`, `add` | done | not used | an error |
+| `tui` | quit, and no write failed | not used | a write failed, or stdin is not a terminal |
 
 ## Status
 
-Version 0.1.0 covers `init`, `add`, `status`, `diff`, `apply`, and `restore`. The plan is in [docs/plans/0001-plan-flarewall-2026-10-21.md](docs/plans/0001-plan-flarewall-2026-10-21.md). A scheduled drift check and a terminal UI come later.
+Version 0.1.0 covers `init`, `add`, `status`, `diff`, `apply`, `restore`, and `tui`. The plan is in [docs/plans/0001-plan-flarewall-2026-10-21.md](docs/plans/0001-plan-flarewall-2026-10-21.md), and the TUI plan is in [docs/plans/0002-plan-flarewall-tui-2026-10-21.md](docs/plans/0002-plan-flarewall-tui-2026-10-21.md). A scheduled drift check comes later.
 
 ## What the baseline covers
 
