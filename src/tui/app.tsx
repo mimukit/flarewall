@@ -185,7 +185,7 @@ function TopBars({ state }: { state: TuiState }) {
   );
 }
 
-/** The summary under the panes: the pane in view on a narrow terminal, the zone counts, and the data repo. */
+/** The summary under the panes: the pane in view on a narrow terminal, the zone counts, and the database. */
 function Summary({ state }: { state: TuiState }) {
   const bar = <Text color={THEME.separator}>{' | '}</Text>;
   return (
@@ -209,7 +209,7 @@ function Summary({ state }: { state: TuiState }) {
         </Text>
       ))}
       {bar}
-      {`data ${state.dataDir}`}
+      {`db ${state.dbPath}`}
     </Text>
   );
 }

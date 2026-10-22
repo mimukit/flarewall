@@ -28,3 +28,6 @@ pnpm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# flarewall data lives in a SQLite file outside the repo, never here
+*.sqlite

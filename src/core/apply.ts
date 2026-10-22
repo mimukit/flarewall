@@ -67,8 +67,8 @@ export interface ZoneBackup {
   botManagement?: BotManagementState;
 }
 
-/** Stores a backup for a zone and returns where it went. The Node CLI writes files; tests can keep it in memory. */
-export type BackupWriter = (zone: string, backup: ZoneBackup) => Promise<string>;
+/** Stores a backup for a zone and returns its name, such as `backup 12`. The CLI and the TUI keep it in the data store. */
+export type BackupWriter = (zone: ZoneRef, backup: ZoneBackup) => Promise<string>;
 
 export interface ZoneRef {
   name: string;
@@ -253,7 +253,7 @@ export async function applyZone(api: CloudflareApi, zone: ZoneRef, desired: Desi
   if (opts.write !== true) return { outcome: 'dry run', plan };
   if (opts.confirm !== undefined && !(await opts.confirm(zone.name))) return { outcome: 'declined', plan };
 
-  const backupPath = await opts.backup(zone.name, await readBackupState(api, zone.id, plan.phases.map((p) => p.phase)));
+  const backupPath = await opts.backup(zone, await readBackupState(api, zone.id, plan.phases.map((p) => p.phase)));
   for (const phase of plan.phases) {
     if (phase.write) await api.updatePhase(zone.id, phase.phase, phase.rules);
   }
@@ -341,7 +341,7 @@ export async function restoreZone(
   if (opts.write !== true) return { outcome: 'dry run', plan };
   if (opts.confirm !== undefined && !(await opts.confirm(zone.name))) return { outcome: 'declined', plan };
 
-  const backupPath = await opts.backup(zone.name, await readBackupState(api, zone.id, plan.phases.map((p) => p.phase)));
+  const backupPath = await opts.backup(zone, await readBackupState(api, zone.id, plan.phases.map((p) => p.phase)));
   for (const phase of plan.phases) await api.updatePhase(zone.id, phase.phase, phase.rules);
   for (const setting of plan.settings) await api.editSetting(zone.id, setting.id, setting.value);
   if (plan.botManagement !== undefined) await api.updateBotManagement(zone.id, plan.botManagement);

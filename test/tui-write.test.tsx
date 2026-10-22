@@ -1,6 +1,5 @@
-// Frame tests for the TUI dry run and write path: the screen on the fake client and a temp data dir.
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+// Frame tests for the TUI dry run and write path: the screen on the fake client and an in-memory data store.
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,11 +9,12 @@ import type { LiveRule } from '../src/core/api.js';
 import { applyInventoryZone, type ZonePlan } from '../src/core/apply.js';
 import { render as renderZone, type Phase } from '../src/core/render.js';
 import { parseInventory } from '../src/core/schema.js';
-import { loadData } from '../src/node/data.js';
+import { loadDataSet } from '../src/core/revisions.js';
+import type { DataStore } from '../src/core/store.js';
 import { createTui } from '../src/tui/main.js';
 import { tuiExitCode } from '../src/tui/state.js';
 import { FakeCloudflareApi, liveFromDesired, type FakeZone } from './fake-api.js';
-import { DEFAULT_BASELINE_FILE, defaultBaseline, legacyCase } from './helpers.js';
+import { defaultBaseline, legacyCase, memoryStore, putBaseline, putInventory } from './helpers.js';
 
 const ACCOUNT = '01a7362d577a6c3019a474fd6f485823';
 const IDS = {
@@ -24,28 +24,27 @@ const IDS = {
 };
 const PLAN = 'Free Website';
 const NOW = new Date('2026-10-21T08:15:00Z');
-const STAMP = '20261021T081500Z';
 const ORG = `version: 1\nzone: example.org\nzone_id: "${IDS.org}"\nredirects: root\n`;
 const NET = `version: 1\nzone: example.net\nzone_id: "${IDS.net}"\nredirects: root\n`;
 
-let dirs: string[] = [];
+let stores: DataStore[] = [];
 
-function dataDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'flarewall-tui-write-'));
-  copyFileSync(DEFAULT_BASELINE_FILE, join(dir, 'baseline.yaml'));
-  dirs.push(dir);
-  return dir;
+/** An in-memory data store with the default baseline, on the fixed clock. */
+async function dataStore(): Promise<DataStore> {
+  const db = memoryStore(() => NOW);
+  await putBaseline(db);
+  stores.push(db);
+  return db;
 }
 
-function writeInventory(dir: string, name: string, text: string) {
-  mkdirSync(join(dir, 'inventory', ACCOUNT), { recursive: true });
-  writeFileSync(join(dir, 'inventory', ACCOUNT, `${name}.yaml`), text);
+async function writeInventory(db: DataStore, name: string, text: string) {
+  await putInventory(db, name, text);
 }
 
 /** Three zones, sorted: example.com (legacy), example.net (in sync), example.org (drift). */
-function seed(api: FakeCloudflareApi, dir: string): { com: FakeZone; org: FakeZone } {
+async function seed(api: FakeCloudflareApi, db: DataStore): Promise<{ com: FakeZone; org: FakeZone }> {
   const legacy = legacyCase('no-hosts-www');
-  writeInventory(dir, 'example.com', readFileSync(join(import.meta.dirname, 'fixtures/legacy-script/no-hosts-www/inventory.yaml'), 'utf8'));
+  await writeInventory(db, 'example.com', readFileSync(join(import.meta.dirname, 'fixtures/legacy-script/no-hosts-www/inventory.yaml'), 'utf8'));
   const withIds = (phase: Phase): LiveRule[] => legacy.phase(phase).map((r, i) => ({ id: `legacy-${phase}-${i}`, ...r }));
   const com = api.addZone({
     summary: { id: IDS.com, name: 'example.com', accountId: ACCOUNT, plan: PLAN },
@@ -59,18 +58,18 @@ function seed(api: FakeCloudflareApi, dir: string): { com: FakeZone; org: FakeZo
     botManagement: { fight_mode: false, enable_js: false },
   });
 
-  writeInventory(dir, 'example.net', NET);
+  await writeInventory(db, 'example.net', NET);
   api.addZone({ summary: { id: IDS.net, name: 'example.net', accountId: ACCOUNT, plan: PLAN }, ...liveFromDesired(renderZone(defaultBaseline(), parseInventory(NET), [])) });
 
-  writeInventory(dir, 'example.org', ORG);
+  await writeInventory(db, 'example.org', ORG);
   const org = api.addZone({ summary: { id: IDS.org, name: 'example.org', accountId: ACCOUNT, plan: PLAN }, ...liveFromDesired(renderZone(defaultBaseline(), parseInventory(ORG), [])) });
   org.settings.always_use_https = 'off';
   return { com, org };
 }
 
-function start(api: FakeCloudflareApi, dir: string) {
+function start(api: FakeCloudflareApi, db: DataStore) {
   const onQuit = vi.fn();
-  const { store, element } = createTui({ api, dataDir: dir, columns: 400, rows: 60, now: () => NOW, onQuit });
+  const { store, element } = createTui({ api, store: db, columns: 400, rows: 60, onQuit });
   const screen = render(element);
   // A fake stdout has 100 columns; set 400, as a terminal resize does, so both panes show.
   Object.defineProperty(screen.stdout, 'columns', { configurable: true, get: () => 400 });
@@ -99,8 +98,8 @@ function diffColumn(frame: string): string {
 
 const ZONES = ['example.com', 'example.net', 'example.org'];
 
-async function loadedScreen(api: FakeCloudflareApi, dir: string) {
-  const screen = start(api, dir);
+async function loadedScreen(api: FakeCloudflareApi, db: DataStore) {
+  const screen = start(api, db);
   await vi.waitFor(() => {
     for (const zone of ZONES) expect(rowLine(screen.frame(), zone)).toMatch(/\s(legacy|in sync|drift)\s/);
   });
@@ -119,53 +118,48 @@ const prompt = (zone: string) => `Apply the baseline to ${zone}? [y/N]`;
 const ESC = '\u001b';
 const CTRL_C = '\u0003';
 
-/** Every backup file under <dir>/backups/<zone>, as relative path -> content. */
-function backupFiles(dir: string, zone: string): Record<string, string> {
-  const root = join(dir, 'backups', zone);
-  const out: Record<string, string> = {};
-  if (!existsSync(root)) return out;
-  for (const stamp of readdirSync(root)) {
-    for (const file of readdirSync(join(root, stamp))) out[`${stamp}/${file}`] = readFileSync(join(root, stamp, file), 'utf8');
-  }
-  return out;
+/** Every stored backup of a zone: the row fields and the backup JSON. */
+async function backups(db: DataStore, zone: string) {
+  return (await db.listBackups(zone)).map((b) => ({ id: b.id, zoneId: b.zoneId, createdAt: b.createdAt, backup: JSON.parse(b.backup) as unknown }));
 }
 
 beforeEach(() => {
-  dirs = [];
+  stores = [];
 });
 afterEach(() => {
   cleanup();
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  for (const db of stores) db.close();
 });
 
 describe('TUI add', () => {
-  it('+ writes the inventory entry of a not managed zone, then reloads it as a managed zone', async () => {
-    const dir = dataDir();
+  it('+ writes the first inventory revision of a not managed zone, then reloads it as a managed zone', async () => {
+    const db = await dataStore();
     const api = new FakeCloudflareApi();
-    seed(api, dir);
+    await seed(api, db);
     api.addZone({
       summary: { id: '2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f', name: 'new.example.com', accountId: ACCOUNT, plan: PLAN },
       dns: [{ type: 'A', name: 'www.new.example.com', content: '192.0.2.10', proxied: true }],
     });
-    const screen = await loadedScreen(api, dir);
+    const screen = await loadedScreen(api, db);
     await vi.waitFor(() => expect(rowLine(screen.frame(), 'new.example.com')).toMatch(/not managed/));
     // The list sorts by name: example.com, example.net, example.org, then new.example.com.
     await keys(screen, 'G');
     expect(flat(screen.frame())).toContain('Press + to add it');
     await keys(screen, '+');
-    const path = join(dir, 'inventory', ACCOUNT, 'new.example.com.yaml');
     await vi.waitFor(() => expect(rowLine(screen.frame(), 'new.example.com')).not.toMatch(/not managed|loading/));
-    expect(readFileSync(path, 'utf8')).toContain('#   www.new.example.com');
-    expect(flat(diffColumn(screen.frame()))).toContain(`new.example.com: wrote ${path}`);
+    const revision = await db.current({ kind: 'inventory', zone: 'new.example.com' });
+    expect(revision).toMatchObject({ id: 5, status: 'approved', author: 'owner' });
+    expect(revision?.text).toContain('#   www.new.example.com');
+    expect(flat(diffColumn(screen.frame()))).toContain('new.example.com: saved inventory revision 5; sort its hosts with flarewall edit new.example.com, then press R');
   });
 });
 
 describe('TUI dry run and write', () => {
   it('d sends no write call and the diff pane shows the planLines text', async () => {
-    const dir = dataDir();
+    const db = await dataStore();
     const api = new FakeCloudflareApi();
-    seed(api, dir);
-    const { baseline, inventories } = await loadData(dir);
+    await seed(api, db);
+    const { baseline, inventories } = await loadDataSet(db);
     let plan: ZonePlan | undefined;
     const inventory = inventories.find((i) => i.zone === 'example.org');
     if (inventory === undefined) throw new Error('no example.org inventory');
@@ -174,27 +168,27 @@ describe('TUI dry run and write', () => {
     const want = flat(planLines(plan).join('\n'));
     expect(want).toContain('always_use_https');
 
-    const screen = await loadedScreen(api, dir);
+    const screen = await loadedScreen(api, db);
     await keys(screen, 'j', 'j', 'd');
     await vi.waitFor(() => expect(flat(diffColumn(screen.frame()))).toContain(want));
     await vi.waitFor(() => expect(screen.frame()).toContain('example.org: dry run, nothing sent'));
     expect(api.writes).toEqual([]);
-    expect(existsSync(join(dir, 'backups'))).toBe(false);
+    expect(await db.listBackups('example.org')).toEqual([]);
   });
 
-  it('a then y writes the same backup files as flarewall apply --write, and the zone then shows in sync', async () => {
-    const cliDir = dataDir();
+  it('a then y stores the same backup as flarewall apply --write, and the zone then shows in sync', async () => {
+    const cliDb = await dataStore();
     const cliApi = new FakeCloudflareApi();
-    seed(cliApi, cliDir);
-    const code = await run(['apply', 'example.com', '--write', '--yes'], { CLOUDFLARE_API_TOKEN: 'test-token', FLAREWALL_DATA: cliDir }, { out: () => {}, err: () => {} }, { api: () => cliApi, now: () => NOW });
+    await seed(cliApi, cliDb);
+    const code = await run(['apply', 'example.com', '--write', '--yes'], { CLOUDFLARE_API_TOKEN: 'test-token' }, { out: () => {}, err: () => {} }, { api: () => cliApi, store: cliDb });
     expect(code).toBe(0);
-    const want = backupFiles(cliDir, 'example.com');
-    expect(Object.keys(want).length).toBeGreaterThan(0);
+    const want = await backups(cliDb, 'example.com');
+    expect(want).toHaveLength(1);
 
-    const dir = dataDir();
+    const db = await dataStore();
     const api = new FakeCloudflareApi();
-    seed(api, dir);
-    const screen = await loadedScreen(api, dir);
+    await seed(api, db);
+    const screen = await loadedScreen(api, db);
     await keys(screen, 'a');
     await vi.waitFor(() => expect(screen.frame()).toContain(prompt('example.com')));
     expect(screen.frame()).toContain('example.com plan (1 of 1)');
@@ -204,29 +198,28 @@ describe('TUI dry run and write', () => {
     await keys(screen, 'y');
     await vi.waitFor(() => expect(screen.frame()).toContain('example.com: applied, read-back in sync'));
     await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.com')).toMatch(/\sin sync\s/));
-    expect(flat(screen.frame())).toContain(`example.com: backup written to ${join(dir, 'backups', 'example.com', STAMP)}`);
-    expect(backupFiles(dir, 'example.com')).toEqual(want);
-    expect(Object.keys(want).every((f) => f.startsWith(`${STAMP}/`))).toBe(true);
+    expect(flat(screen.frame())).toContain('example.com: backup 1 saved');
+    expect(await backups(db, 'example.com')).toEqual(want);
   });
 
   it('a then n sends no write call', async () => {
-    const dir = dataDir();
+    const db = await dataStore();
     const api = new FakeCloudflareApi();
-    seed(api, dir);
-    const screen = await loadedScreen(api, dir);
+    await seed(api, db);
+    const screen = await loadedScreen(api, db);
     await keys(screen, 'a');
     await vi.waitFor(() => expect(screen.frame()).toContain(prompt('example.com')));
     await keys(screen, 'n');
     await vi.waitFor(() => expect(screen.frame()).toContain('example.com: declined, nothing sent'));
     expect(api.writes).toEqual([]);
-    expect(existsSync(join(dir, 'backups'))).toBe(false);
+    expect(await db.listBackups('example.com')).toEqual([]);
   });
 
   it('with two marked zones, a, y, esc writes the first zone only', async () => {
-    const dir = dataDir();
+    const db = await dataStore();
     const api = new FakeCloudflareApi();
-    seed(api, dir);
-    const screen = await loadedScreen(api, dir);
+    await seed(api, db);
+    const screen = await loadedScreen(api, db);
     await keys(screen, ' ', 'j', 'j', ' ');
     await vi.waitFor(() => expect(rowLine(screen.frame(), 'example.org')).toMatch(/^│ >●/));
     expect(rowLine(screen.frame(), 'example.com')).toMatch(/^│  ●/);
@@ -245,10 +238,10 @@ describe('TUI dry run and write', () => {
   });
 
   it('with one of two marked zones hidden by a filter, a opens CONFIRM for the visible zone only', async () => {
-    const dir = dataDir();
+    const db = await dataStore();
     const api = new FakeCloudflareApi();
-    seed(api, dir);
-    const screen = await loadedScreen(api, dir);
+    await seed(api, db);
+    const screen = await loadedScreen(api, db);
     await keys(screen, ' ', 'j', 'j', ' ', '/', 'o', 'r', 'g', '\r');
     await vi.waitFor(() => expect(screen.frame()).toContain('2 marked, 1 hidden'));
     expect(rowLine(screen.frame(), 'example.com')).toBeUndefined();
@@ -261,18 +254,18 @@ describe('TUI dry run and write', () => {
     expect(api.writes).toEqual([]);
   });
 
-  it('with a fake that rejects updatePhase, a then y shows the error and the backup path, and the zone keeps its rules', async () => {
-    const dir = dataDir();
+  it('with a fake that rejects updatePhase, a then y shows the error and the backup id, and the zone keeps its rules', async () => {
+    const db = await dataStore();
     const api = new FakeCloudflareApi();
-    const { com } = seed(api, dir);
+    const { com } = await seed(api, db);
     const before = structuredClone(com.phases);
     api.fail('updatePhase', IDS.com, 'updatePhase failed: 403 forbidden');
-    const screen = await loadedScreen(api, dir);
+    const screen = await loadedScreen(api, db);
     await keys(screen, 'a');
     await vi.waitFor(() => expect(screen.frame()).toContain(prompt('example.com')));
     await keys(screen, 'y');
     await vi.waitFor(() => expect(screen.frame()).toContain('example.com: error: updatePhase failed: 403 forbidden'));
-    expect(flat(screen.frame())).toContain(`example.com: backup written to ${join(dir, 'backups', 'example.com', STAMP)}`);
+    expect(flat(screen.frame())).toContain('example.com: backup 1 saved');
     expect(rowLine(screen.frame(), 'example.com')).toMatch(/\serror\s/);
     expect(com.phases).toEqual(before);
     expect(tuiExitCode(screen.store.getState())).toBe(2);
@@ -299,10 +292,10 @@ describe('TUI dry run and write', () => {
         return super.updatePhase(zoneId, phase, rules);
       }
     }
-    const dir = dataDir();
+    const db = await dataStore();
     const api = new SlowWriteApi();
-    seed(api, dir);
-    const screen = await loadedScreen(api, dir);
+    await seed(api, db);
+    const screen = await loadedScreen(api, db);
     screen.onQuit.mockImplementation(() => log.push('quit'));
     await keys(screen, ' ', 'j', 'j', ' ', 'a');
     await vi.waitFor(() => expect(screen.frame()).toContain(prompt('example.com')));
