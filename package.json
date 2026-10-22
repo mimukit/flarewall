@@ -6,7 +6,7 @@
   "license": "MIT",
   "author": "Mukitul Islam Mukit",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "bin": {
     "flarewall": "dist/cli/main.js"
