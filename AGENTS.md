@@ -25,7 +25,7 @@ The plan is `docs/plans/0001-plan-flarewall-2026-10-21.md`. Its Design decisions
 
 ## Rules for agents
 
-- Never put private data in this repo: account IDs, zone IDs or names, client names, host roles, origin IPs, backups, or tokens. That data lives in a separate private data repo. Test fixtures use `example.com` hosts and RFC 5737 IP addresses.
+- Never put private data in this repo: account IDs, zone IDs or names, client names, host roles, origin IPs, backups, or tokens. That data lives in a local SQLite file outside every repo (`FLAREWALL_DB`); plan 0003 (`docs/plans/0003-plan-d1-data-store-2026-10-21.md`) replaced the old private data repo. Never commit a database file or an export. Test fixtures use `example.com` hosts and RFC 5737 IP addresses.
 - Never write a Cloudflare token to a file. The tool reads it from `CLOUDFLARE_API_TOKEN` only.
 - Never run `apply` with the write flag against a live zone. The owner runs writes.
 - Keep the core free of logic in the TUI or the skill. Both call the core.

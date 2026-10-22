@@ -63,7 +63,7 @@ Rejected alternatives:
 - YAML files in a plain directory with no git. It keeps the file shape, but version history, pending proposals, and drift history each need their own index that SQLite gives for free.
 - Keep the git repo and add SQLite for drift history only (the research note's suggestion). The owner rejected the git repo itself.
 
-### Phase 1: storage port, schema, and the SQLite adapter (#8)
+### Phase 1: storage port, schema, and the SQLite adapter (#8) (built 2026-10-22)
 
 - Confirm the Node version where `node:sqlite` needs no flag, and whether it warns on Node 22. Record the answer in the plan's Node version row.
 - Add the `Store` interface in `src/core/store.ts`: revisions (current, list, get, add, decide), backups (add, list, get), runs (add, list), and the schema version.
@@ -73,7 +73,7 @@ Rejected alternatives:
 
 Done when: `pnpm test` passes with the new store tests, and `test/core-purity.test.ts` still passes with `src/core/store.ts` in the core.
 
-### Phase 2: move the CLI to the store (#8)
+### Phase 2: move the CLI to the store (#8) (built 2026-10-22)
 
 - Move `flarewall init` to create the file, apply the schema, and write the first baseline revision.
 - `status`, `diff`, `apply`, and `restore` read the current revisions from the store. `apply` and `restore` write backups to the store.
@@ -84,7 +84,7 @@ Done when: `pnpm test` passes with the new store tests, and `test/core-purity.te
 
 Done when: every CLI test runs on an in-memory store with no temp data directory, `FLAREWALL_DB=/tmp/x.sqlite flarewall init` prints the baseline revision id, and `flarewall export` then `flarewall import` into a new file gives a database whose `export` is byte-identical.
 
-### Phase 3: docs and the plan 0001 follow-up (#8)
+### Phase 3: docs and the plan 0001 follow-up (#8) (built 2026-10-22)
 
 - Update the superseded rows in the plan 0001 Design decisions table to point to this plan.
 - Update the AGENTS.md rule that says the private data lives in a separate data repo.
