@@ -1,4 +1,4 @@
-// Runs the reducer's effects: reads the data repo and the live zones through the core, applies
+// Runs the reducer's effects: reads the data store and the live zones through the core, applies
 // zones through applyInventoryZone, adds zones as `flarewall add` does, and sends the answers back
 // as data events. It holds no rule
 // logic; statusAll and applyZone decide every state and every write.
@@ -10,12 +10,11 @@ import type { EffectRunner } from './store.js';
 
 export interface RunnerDeps {
   api: CloudflareApi;
-  dataDir: string;
-  /** Reads baseline.yaml and the inventory. Its error message names the file: `<file>: <error>`. */
-  load: (dataDir: string) => Promise<TuiData>;
+  /** Reads the current baseline and inventory revisions. Its error message names the revision. */
+  load: () => Promise<TuiData>;
   /** Stores the backup before a write: the same writer as `flarewall apply --write`. */
   backup: BackupWriter;
-  /** Writes the inventory entry for a zone and returns its path: the same step as `flarewall add`. */
+  /** Writes the first inventory revision for a zone and names it: the same step as `flarewall add`. */
   add: (zone: string) => Promise<string>;
   /** Called on the quit effect. */
   onQuit: () => void;
@@ -39,7 +38,7 @@ export function createRunner(deps: RunnerDeps): EffectRunner {
         void (async () => {
           let data: TuiData;
           try {
-            data = await deps.load(deps.dataDir);
+            data = await deps.load();
           } catch (error) {
             dispatch({ type: 'load-failed', gen, error: message(error) });
             return;
@@ -74,7 +73,7 @@ export function createRunner(deps: RunnerDeps): EffectRunner {
         }
         const backup: BackupWriter = async (name, state) => {
           const path = await deps.backup(name, state);
-          dispatch({ type: 'backup-written', zone, path });
+          dispatch({ type: 'backup-written', zone, name: path });
           return path;
         };
         const confirm = () =>
@@ -97,7 +96,7 @@ export function createRunner(deps: RunnerDeps): EffectRunner {
         void (async () => {
           for (const zone of effect.zones) {
             try {
-              dispatch({ type: 'zone-added', zone, path: await deps.add(zone) });
+              dispatch({ type: 'zone-added', zone, revision: await deps.add(zone) });
             } catch (error) {
               dispatch({ type: 'add-failed', zone, error: message(error) });
             }

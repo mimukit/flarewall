@@ -36,7 +36,7 @@ export type StateFilter = (typeof STATE_FILTERS)[number];
 export const SORTS = ['zone', 'state', 'plan', 'changes'] as const;
 export type Sort = (typeof SORTS)[number];
 
-/** The last good data from the data repo. */
+/** The last good data from the data store. */
 export interface TuiData {
   baseline: Baseline;
   inventories: Inventory[];
@@ -59,7 +59,8 @@ export interface Row {
 }
 
 export interface TuiState {
-  dataDir: string;
+  /** Where the data store lives, for the footer. */
+  dbPath: string;
   columns: number;
   rows: number;
   /** Bumped by each full load. Data events from an earlier generation are dropped. */
@@ -80,9 +81,9 @@ export interface TuiState {
   showValues: boolean;
   /** The first keys of a sequence such as `gg`. */
   pending: string;
-  /** The step of a full load in flight: reading the data repo, or listing the zones. Absent when neither runs. */
+  /** The step of a full load in flight: reading the data store, or listing the zones. Absent when neither runs. */
   loading?: 'data' | 'zones';
-  /** A load or parse error for the header, as `<file>: <error>`. */
+  /** A load or parse error for the header, as `revision <id> (<document>): <error>`. */
   error?: string;
   /** Marked zone names. A mark stays when a filter hides its zone. */
   marks: string[];
@@ -121,11 +122,11 @@ export type TuiEvent =
   /** The answers of an `apply-zone` effect, in the order applyZone produces them. */
   | { type: 'plan-ready'; zone: string; plan: ZonePlan }
   | { type: 'confirm-asked'; zone: string }
-  | { type: 'backup-written'; zone: string; path: string }
+  | { type: 'backup-written'; zone: string; name: string }
   | { type: 'zone-done'; zone: string; outcome: ApplyResult['outcome'] }
   | { type: 'zone-failed'; zone: string; error: string }
   /** The answers of an `add-zones` effect: one per zone, then `adds-done`. */
-  | { type: 'zone-added'; zone: string; path: string }
+  | { type: 'zone-added'; zone: string; revision: string }
   | { type: 'add-failed'; zone: string; error: string }
   | { type: 'adds-done' };
 
@@ -134,7 +135,7 @@ export interface Update {
   effects: Effect[];
 }
 
-export function initialState(options: { dataDir: string; columns: number; rows: number }): TuiState {
+export function initialState(options: { dbPath: string; columns: number; rows: number }): TuiState {
   return {
     ...options,
     gen: 0,
@@ -363,7 +364,7 @@ export function zoneCard(row: Row): PaneLine[] {
  */
 export function listNotice(state: TuiState): { text: string; busy: boolean } | undefined {
   if (visibleRows(state).length > 0) return undefined;
-  if (state.loading === 'data') return { text: `Reading the data repo at ${state.dataDir}`, busy: true };
+  if (state.loading === 'data') return { text: `Reading the database at ${state.dbPath}`, busy: true };
   if (state.loading === 'zones') return { text: 'Listing the zones the token can see on Cloudflare', busy: true };
   if (state.zones.length > 0) return { text: 'No zone matches the search or the state filter.', busy: false };
   if (state.error !== undefined) return { text: 'No zone loaded. Fix the error above, then press R.', busy: false };
@@ -846,12 +847,12 @@ export function update(state: TuiState, event: TuiEvent): Update {
       if (state.run === undefined) return none(state);
       return none(settle({ ...state, mode: { kind: 'confirm', zone: event.zone }, selected: event.zone, help: false }));
     case 'backup-written':
-      return none(state.run === undefined ? state : addLine(state, event.zone, `${event.zone}: backup written to ${event.path}`));
+      return none(state.run === undefined ? state : addLine(state, event.zone, `${event.zone}: ${event.name} saved`));
     case 'zone-done':
     case 'zone-failed':
       return onZoneEnd(state, event);
     case 'zone-added':
-      return none(onAdded(state, event.zone, `${event.zone}: wrote ${event.path}; put each host in hosts.api or hosts.wordpress, then press R`));
+      return none(onAdded(state, event.zone, `${event.zone}: saved ${event.revision}; sort its hosts with flarewall edit ${event.zone}, then press R`));
     case 'add-failed':
       return none(onAdded(state, event.zone, `${event.zone}: error: ${event.error}`));
     case 'adds-done':

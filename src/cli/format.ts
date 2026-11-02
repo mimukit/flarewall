@@ -125,9 +125,9 @@ export function planLines(plan: ZonePlan): string[] {
   return lines;
 }
 
-/** The restore plan for one zone from the backup directory `dir`. */
-export function restoreLines(plan: RestorePlan, dir: string): string[] {
-  const lines = [`${plan.zone}: restore from ${dir}`];
+/** The restore plan for one zone from the backup named `source`. */
+export function restoreLines(plan: RestorePlan, source: string): string[] {
+  const lines = [`${plan.zone}: restore from ${source}`];
   for (const p of plan.phases) {
     lines.push(`  ${p.phase}: send ${p.rules.length} rules`);
     for (const r of p.rules) {

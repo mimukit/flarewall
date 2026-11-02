@@ -1,17 +1,17 @@
-// Frame tests for the read-only TUI: the screen on the fake client and a temp data dir.
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+// Frame tests for the read-only TUI: the screen on the fake client and an in-memory data store.
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { diffLines, statusLines } from '../src/cli/format.js';
 import { render as renderZone } from '../src/core/render.js';
 import { parseInventory } from '../src/core/schema.js';
+import { loadDataSet } from '../src/core/revisions.js';
 import { statusAll } from '../src/core/status.js';
-import { loadData } from '../src/node/data.js';
+import type { DataStore } from '../src/core/store.js';
 import { createTui } from '../src/tui/main.js';
 import { FakeCloudflareApi, liveFromDesired } from './fake-api.js';
-import { DEFAULT_BASELINE_FILE, defaultBaseline, legacyCase } from './helpers.js';
+import { defaultBaseline, legacyCase, memoryStore, putBaseline, putInventory } from './helpers.js';
 
 const ACCOUNT = '01a7362d577a6c3019a474fd6f485823';
 const IDS = {
@@ -60,20 +60,19 @@ class SlowListApi extends FakeCloudflareApi {
   }
 }
 
-let dir: string;
+let db: DataStore;
 
-function writeInventory(name: string, text: string) {
-  mkdirSync(join(dir, 'inventory', ACCOUNT), { recursive: true });
-  writeFileSync(join(dir, 'inventory', ACCOUNT, `${name}.yaml`), text);
+async function writeInventory(name: string, text: string) {
+  await putInventory(db, name, text);
 }
 
 /**
  * Five zones, sorted: bad.example.com (error), example.com (legacy), example.net (in sync),
  * example.org (drift), new.example.com (not managed).
  */
-function seed(api: FakeCloudflareApi) {
+async function seed(api: FakeCloudflareApi) {
   const legacy = legacyCase('no-hosts-www');
-  writeInventory('example.com', readFileSync(join(import.meta.dirname, 'fixtures/legacy-script/no-hosts-www/inventory.yaml'), 'utf8'));
+  await writeInventory('example.com', readFileSync(join(import.meta.dirname, 'fixtures/legacy-script/no-hosts-www/inventory.yaml'), 'utf8'));
   api.addZone({
     summary: { id: IDS.com, name: 'example.com', accountId: ACCOUNT, plan: PLAN },
     dns: legacy.dns,
@@ -87,7 +86,7 @@ function seed(api: FakeCloudflareApi) {
   });
 
   const net = inventoryText('example.net', IDS.net, NET_EXTRA);
-  writeInventory('example.net', net);
+  await writeInventory('example.net', net);
   api.addZone({
     summary: { id: IDS.net, name: 'example.net', accountId: ACCOUNT, plan: PLAN },
     dns: NET_DNS,
@@ -95,14 +94,14 @@ function seed(api: FakeCloudflareApi) {
   });
 
   const org = inventoryText('example.org', IDS.org);
-  writeInventory('example.org', org);
+  await writeInventory('example.org', org);
   const orgZone = api.addZone({
     summary: { id: IDS.org, name: 'example.org', accountId: ACCOUNT, plan: 'Pro Website' },
     ...liveFromDesired(renderZone(defaultBaseline(), parseInventory(org), [])),
   });
   orgZone.settings.always_use_https = 'off';
 
-  writeInventory('bad.example.com', inventoryText('bad.example.com', IDS.bad));
+  await writeInventory('bad.example.com', inventoryText('bad.example.com', IDS.bad));
   api.addZone({ summary: { id: IDS.bad, name: 'bad.example.com', accountId: ACCOUNT, plan: PLAN } });
   api.fail('getPhase', IDS.bad, 'getPhase failed: 403 forbidden');
 
@@ -114,7 +113,7 @@ const INVENTORY_ZONES = ZONES.filter((z) => z !== 'new.example.com');
 
 function start(api: FakeCloudflareApi) {
   const onQuit = vi.fn();
-  const { element } = createTui({ api, dataDir: dir, load: loadData, columns: 100, rows: 40, onQuit });
+  const { element } = createTui({ api, store: db, columns: 100, rows: 40, onQuit });
   const screen = render(element);
   return { ...screen, onQuit, frame: () => screen.lastFrame() ?? '' };
 }
@@ -153,20 +152,20 @@ async function loadedScreen(api: FakeCloudflareApi) {
   return screen;
 }
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'flarewall-tui-'));
-  copyFileSync(DEFAULT_BASELINE_FILE, join(dir, 'baseline.yaml'));
+beforeEach(async () => {
+  db = memoryStore();
+  await putBaseline(db);
 });
 afterEach(() => {
   cleanup();
-  rmSync(dir, { recursive: true, force: true });
+  db.close();
 });
 
 describe('TUI frames', () => {
   it('shows every inventory zone with the state word that statusLines prints', async () => {
     const api = new FakeCloudflareApi();
-    seed(api);
-    const { baseline, inventories } = await loadData(dir);
+    await seed(api);
+    const { baseline, inventories } = await loadDataSet(db);
     const words = new Map(
       statusLines(await statusAll(api, baseline, inventories))
         .slice(1)
@@ -186,7 +185,7 @@ describe('TUI frames', () => {
 
   it('shows every row with loading in STATE before the first report arrives', async () => {
     const api = new GatedApi();
-    seed(api);
+    await seed(api);
     const screen = start(api);
     await vi.waitFor(() => {
       for (const zone of INVENTORY_ZONES) expect(rowLine(screen.frame(), zone), zone).toBeDefined();
@@ -202,8 +201,11 @@ describe('TUI frames', () => {
 
   it('shows a spinner and the load step in the empty list while the zones load', async () => {
     const api = new SlowListApi();
-    seed(api);
-    rmSync(join(dir, 'inventory'), { recursive: true, force: true });
+    await seed(api);
+    // A store with the baseline and no inventory.
+    db.close();
+    db = memoryStore();
+    await putBaseline(db);
     const screen = start(api);
     await vi.waitFor(() => expect(screen.frame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Listing the zones the token can see on Cloudflare/));
     api.release();
@@ -213,8 +215,8 @@ describe('TUI frames', () => {
 
   it("after j, the diff pane shows the second zone's diffLines", async () => {
     const api = new FakeCloudflareApi();
-    seed(api);
-    const { baseline, inventories } = await loadData(dir);
+    await seed(api);
+    const { baseline, inventories } = await loadDataSet(db);
     const second = (await statusAll(api, baseline, inventories, ['example.com']))[0];
     if (second === undefined) throw new Error('no report for example.com');
     // The pane title carries `example.com ◆ legacy`, so the pane drops the head line that repeats it.
@@ -231,7 +233,7 @@ describe('TUI frames', () => {
 
   it('shows one pane at 100 columns, and tab switches to the other', async () => {
     const api = new FakeCloudflareApi();
-    seed(api);
+    await seed(api);
     const screen = await loadedScreen(api);
     const zonesOnly = screen.frame();
     expect(zonesOnly).toMatch(/ZONE ↓\s+PLAN\s+STATE/);
@@ -254,33 +256,33 @@ describe('TUI frames', () => {
     expect(screen.frame()).toContain('bad.example.com: error: getPhase failed: 403 forbidden');
   });
 
-  it('R after a bad edit to baseline.yaml shows the parse error in the header and keeps the earlier rows', async () => {
+  it('R after a bad baseline revision shows the parse error in the header and keeps the earlier rows', async () => {
     const api = new FakeCloudflareApi();
-    seed(api);
+    await seed(api);
     const screen = await loadedScreen(api);
     const before = ZONES.map((z) => rowLine(screen.frame(), z));
 
-    writeFileSync(join(dir, 'baseline.yaml'), 'version: 2\n');
+    await putBaseline(db, 'version: 2\n');
     screen.stdin.write('R');
-    await vi.waitFor(() => expect(screen.frame()).toContain('baseline.yaml: invalid baseline'));
+    await vi.waitFor(() => expect(screen.frame()).toContain('revision 6 (baseline): invalid baseline'));
     const header = screen.frame().split('\n').slice(0, 2).join('\n');
-    expect(header).toContain(`${join(dir, 'baseline.yaml')}: invalid baseline`);
+    expect(header).toContain('revision 6 (baseline): invalid baseline');
     expect(ZONES.map((z) => rowLine(screen.frame(), z))).toEqual(before);
   });
 
-  it('R after a YAML syntax error in baseline.yaml names the file in the header', async () => {
+  it('R after a YAML syntax error in the baseline names the revision in the header', async () => {
     const api = new FakeCloudflareApi();
-    seed(api);
+    await seed(api);
     const screen = await loadedScreen(api);
-    writeFileSync(join(dir, 'baseline.yaml'), 'version: [1\n');
+    await putBaseline(db, 'version: [1\n');
     screen.stdin.write('R');
-    await vi.waitFor(() => expect(screen.frame()).toContain(`${join(dir, 'baseline.yaml')}: `));
+    await vi.waitFor(() => expect(screen.frame()).toContain('revision 6 (baseline): '));
     expect(rowLine(screen.frame(), 'example.org')).toMatch(/\sdrift\s/);
   });
 
   it('q quits', async () => {
     const api = new FakeCloudflareApi();
-    seed(api);
+    await seed(api);
     const screen = await loadedScreen(api);
     screen.stdin.write('q');
     await vi.waitFor(() => expect(screen.onQuit).toHaveBeenCalledTimes(1));

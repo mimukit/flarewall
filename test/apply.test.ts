@@ -1,15 +1,13 @@
 // C11 to C15: apply and restore, driven through the CLI with an in-memory CloudflareApi.
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { run, type RunDeps } from '../src/cli/run.js';
 import type { LiveRule } from '../src/core/api.js';
 import { applyInventoryZone, planZone } from '../src/core/apply.js';
 import { render, type Phase } from '../src/core/render.js';
 import { parseInventory } from '../src/core/schema.js';
+import type { DataStore } from '../src/core/store.js';
 import { FakeCloudflareApi, liveFromDesired } from './fake-api.js';
-import { DEFAULT_BASELINE_FILE, defaultBaseline, legacyCase, readFixture } from './helpers.js';
+import { defaultBaseline, legacyCase, memoryStore, putBaseline, putInventory, readFixture } from './helpers.js';
 
 const ACCOUNT = '01a7362d577a6c3019a474fd6f485823';
 const IDS = {
@@ -22,7 +20,6 @@ const RATE: Phase = 'http_ratelimit';
 const REDIRECT: Phase = 'http_request_dynamic_redirect';
 const LEGACY_CASE = 'api-wordpress-geo-root';
 const NOW = new Date('2026-10-21T08:15:00Z');
-const STAMP = '20261021T081500Z';
 
 const NET_INVENTORY = `version: 1
 zone: example.net
@@ -44,7 +41,7 @@ hosts:
 redirects: www
 `;
 
-let dir: string;
+let store: DataStore;
 let api: FakeCloudflareApi;
 let answers: boolean[];
 let asked: string[];
@@ -56,19 +53,18 @@ const cli = async (...argv: string[]) => {
   const deps: RunDeps = {
     api: () => api,
     isTTY,
-    now: () => NOW,
+    store,
     confirm: async (question) => {
       asked.push(question);
       return answers.shift() ?? false;
     },
   };
-  const code = await run(argv, { CLOUDFLARE_API_TOKEN: 'test-token', FLAREWALL_DATA: dir }, { out: (l) => out.push(l), err: (l) => err.push(l) }, deps);
+  const code = await run(argv, { CLOUDFLARE_API_TOKEN: 'test-token' }, { out: (l) => out.push(l), err: (l) => err.push(l) }, deps);
   return { code, out: out.join('\n'), err: err.join('\n') };
 };
 
-function writeInventory(name: string, text: string) {
-  mkdirSync(join(dir, 'inventory', ACCOUNT), { recursive: true });
-  writeFileSync(join(dir, 'inventory', ACCOUNT, `${name}.yaml`), text);
+async function writeInventory(name: string, text: string) {
+  await putInventory(store, name, text);
 }
 
 /** Gives every fixture rule an id, as Cloudflare does. */
@@ -79,9 +75,9 @@ function withIds(phase: Phase, rules: Record<string, unknown>[]): LiveRule[] {
 const OFFICE_RULE: LiveRule = { id: 'hand-1', description: 'Allow office', action: 'skip', expression: '(ip.src eq 192.0.2.99)', enabled: true, logging: { enabled: false }, version: '2' };
 
 /** example.com: hardened by the old script, plus one hand-made rule listed first. */
-function addLegacyZone() {
+async function addLegacyZone() {
   const fixture = legacyCase(LEGACY_CASE);
-  writeInventory('example.com', readFixture(`legacy-script/${LEGACY_CASE}/inventory.yaml`));
+  await writeInventory('example.com', readFixture(`legacy-script/${LEGACY_CASE}/inventory.yaml`));
   return api.addZone({
     summary: { id: IDS.com, name: 'example.com', accountId: ACCOUNT, plan: 'Free Website' },
     dns: fixture.dns,
@@ -96,8 +92,8 @@ function addLegacyZone() {
 }
 
 /** example.net: in sync, plus three hand-made custom rules, so owned + unowned is 7 against a limit of 5. */
-function addOverLimitZone() {
-  writeInventory('example.net', NET_INVENTORY);
+async function addOverLimitZone() {
+  await writeInventory('example.net', NET_INVENTORY);
   const dns = [{ name: 'api.example.net', type: 'A', content: '192.0.2.10', proxied: true }];
   const live = liveFromDesired(render(defaultBaseline(), parseInventory(NET_INVENTORY), dns));
   live.phases[CUSTOM]?.splice(1, 1);
@@ -106,8 +102,8 @@ function addOverLimitZone() {
 }
 
 /** example.org: a new zone with no rules and Bot Fight Mode off. */
-function addNewZone() {
-  writeInventory('example.org', ORG_INVENTORY);
+async function addNewZone() {
+  await writeInventory('example.org', ORG_INVENTORY);
   return api.addZone({
     summary: { id: IDS.org, name: 'example.org', accountId: ACCOUNT, plan: 'Free Website' },
     dns: [{ name: 'example.org', type: 'A', content: '192.0.2.20', proxied: true }],
@@ -118,24 +114,24 @@ function addNewZone() {
 
 const writesFor = (zoneId: string) => api.writes.filter((w) => w.zoneId === zoneId);
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'flarewall-apply-'));
-  copyFileSync(DEFAULT_BASELINE_FILE, join(dir, 'baseline.yaml'));
+beforeEach(async () => {
+  store = memoryStore(() => NOW);
+  await putBaseline(store);
   api = new FakeCloudflareApi();
   answers = [];
   asked = [];
   isTTY = true;
 });
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  store.close();
 });
 
 describe('apply dry run (C11)', () => {
   it('sends no write call, writes no backup, and prints the plan', async () => {
-    addLegacyZone();
+    await addLegacyZone();
     const result = await cli('apply', 'example.com');
     expect(api.writes).toEqual([]);
-    expect(existsSync(join(dir, 'backups'))).toBe(false);
+    expect(await store.listBackups('example.com')).toEqual([]);
     expect(result.code).toBe(0);
     expect(result.out).toContain('replace legacy "Block non-standard ports" (id legacy-http_request_firewall_custom-0) with flarewall_ports');
     expect(result.out).toContain('setting always_use_https: "off" -> "on"');
@@ -144,7 +140,7 @@ describe('apply dry run (C11)', () => {
   });
 
   it('apply needs zone names or --all', async () => {
-    addLegacyZone();
+    await addLegacyZone();
     expect((await cli('apply')).code).toBe(2);
     expect((await cli('apply', '--all', 'example.com')).code).toBe(2);
     expect(api.writes).toEqual([]);
@@ -153,7 +149,7 @@ describe('apply dry run (C11)', () => {
 
 describe('apply --write (C12, C13)', () => {
   it('backs up, replaces legacy rules keeping their ids, keeps unowned rules last, and reads back in sync', async () => {
-    const zone = addLegacyZone();
+    const zone = await addLegacyZone();
     const before = structuredClone(zone);
     answers = [true];
     const result = await cli('apply', 'example.com', '--write');
@@ -161,19 +157,15 @@ describe('apply --write (C12, C13)', () => {
     expect(result.code).toBe(0);
     expect(asked).toEqual(['Apply the baseline to example.com? [y/N] ']);
 
-    // Backup: the state before the write, one file per part.
-    const backupDir = join(dir, 'backups', 'example.com', STAMP);
-    expect(result.out).toContain(`example.com: backup written to ${backupDir}`);
-    expect(readdirSync(backupDir).sort()).toEqual([
-      'always_use_https.json',
-      'bot_management.json',
-      'browser_check.json',
-      `${RATE}.json`,
-      `${CUSTOM}.json`,
-      `${REDIRECT}.json`,
-    ].sort());
-    expect(JSON.parse(readFileSync(join(backupDir, `${CUSTOM}.json`), 'utf8'))).toEqual(before.phases[CUSTOM]);
-    expect(JSON.parse(readFileSync(join(backupDir, 'always_use_https.json'), 'utf8'))).toEqual({ value: 'off' });
+    // Backup: the state before the write, one row in the store.
+    expect(result.out).toContain('example.com: backup 1 saved');
+    const row = await store.getBackup(1);
+    expect(row).toMatchObject({ zone: 'example.com', zoneId: IDS.com, createdAt: NOW.toISOString() });
+    const saved = JSON.parse(row?.backup ?? '{}');
+    expect(Object.keys(saved.phases).sort()).toEqual([CUSTOM, RATE, REDIRECT].sort());
+    expect(saved.phases[CUSTOM]).toEqual(before.phases[CUSTOM]);
+    expect(saved.settings).toEqual({ always_use_https: 'off', browser_check: 'off' });
+    expect(saved.botManagement).toEqual({ fight_mode: false, enable_js: false });
 
     // Legacy rules replaced in place, ids kept, no duplicates, unowned rule after the owned ones.
     const custom = zone.phases[CUSTOM] ?? [];
@@ -203,7 +195,7 @@ describe('apply --write (C12, C13)', () => {
   });
 
   it('sends Bot Fight Mode with JavaScript detections together', async () => {
-    addNewZone();
+    await addNewZone();
     const result = await cli('apply', 'example.org', '--write', '--yes');
     expect(result.code).toBe(0);
     expect(writesFor(IDS.org).filter((w) => w.method === 'updateBotManagement')).toEqual([
@@ -213,18 +205,18 @@ describe('apply --write (C12, C13)', () => {
   });
 
   it('a declined confirmation sends nothing and exits 0', async () => {
-    addLegacyZone();
+    await addLegacyZone();
     answers = [false];
     const result = await cli('apply', 'example.com', '--write');
     expect(asked).toHaveLength(1);
     expect(api.writes).toEqual([]);
-    expect(existsSync(join(dir, 'backups'))).toBe(false);
+    expect(await store.listBackups('example.com')).toEqual([]);
     expect(result.out).toContain('example.com: declined, nothing sent');
     expect(result.code).toBe(0);
   });
 
   it('refuses --write with no TTY and no --yes, before any call', async () => {
-    addLegacyZone();
+    await addLegacyZone();
     isTTY = false;
     const result = await cli('apply', 'example.com', '--write');
     expect(result.code).toBe(2);
@@ -236,21 +228,21 @@ describe('apply --write (C12, C13)', () => {
 
 describe('limits and failures (C13, C14)', () => {
   it('skips a zone over the Free plan custom rule limit, and the next zone still applies', async () => {
-    addOverLimitZone();
-    addNewZone();
+    await addOverLimitZone();
+    await addNewZone();
     const result = await cli('apply', 'example.net', 'example.org', '--write', '--yes');
     expect(result.err).toContain(
       'example.net: error: skipped, over the Free plan limit: http_request_firewall_custom would hold 7 rules (4 owned + 3 unowned); the Free plan allows 5',
     );
     expect(writesFor(IDS.net)).toEqual([]);
-    expect(existsSync(join(dir, 'backups', 'example.net'))).toBe(false);
+    expect(await store.listBackups('example.net')).toEqual([]);
     expect(result.out).toContain('example.org: applied, read-back in sync');
     expect(result.code).toBe(2);
   });
 
   it('a failing write in one zone does not stop the next zone', async () => {
-    addLegacyZone();
-    addNewZone();
+    await addLegacyZone();
+    await addNewZone();
     api.fail('updatePhase', IDS.com, 'HTTP 500 from the API');
     const result = await cli('apply', '--all', '--write', '--yes');
     expect(result.err).toContain('example.com: error: HTTP 500 from the API');
@@ -259,7 +251,7 @@ describe('limits and failures (C13, C14)', () => {
   });
 
   it('a read-back that is not in sync is a failure', async () => {
-    addNewZone();
+    await addNewZone();
     const update = api.updatePhase.bind(api);
     api.updatePhase = async (zoneId, phase, rules) => update(zoneId, phase, rules.map((r) => (r.ref === 'flarewall_ports' ? { ...r, enabled: false } : r)));
     const result = await cli('apply', 'example.org', '--write', '--yes');
@@ -270,23 +262,22 @@ describe('limits and failures (C13, C14)', () => {
 
 describe('restore (C15)', () => {
   it('restore --write of the apply backup returns the zone to its earlier state', async () => {
-    const zone = addLegacyZone();
+    const zone = await addLegacyZone();
     const before = structuredClone({ phases: zone.phases, settings: zone.settings, botManagement: zone.botManagement });
     expect((await cli('apply', 'example.com', '--write', '--yes')).code).toBe(0);
-    const backupDir = join(dir, 'backups', 'example.com', STAMP);
-
     const writesAfterApply = api.writes.length;
-    const dry = await cli('restore', 'example.com', backupDir);
+    const dry = await cli('restore', 'example.com', '1');
     expect(dry.code).toBe(0);
-    expect(dry.out).toContain(`example.com: restore from ${backupDir}`);
+    expect(dry.out).toContain(`example.com: restore from backup 1 (${NOW.toISOString()})`);
     expect(dry.out).toContain('example.com: dry run, nothing sent; pass --write to send');
     expect(api.writes).toHaveLength(writesAfterApply);
 
-    const result = await cli('restore', 'example.com', STAMP, '--write', '--yes');
+    const result = await cli('restore', 'example.com', '#1', '--write', '--yes');
     expect(result.err).toBe('');
     expect(result.code).toBe(0);
-    // A fresh backup of the applied state comes first, in its own directory.
-    expect(result.out).toContain(`example.com: backup written to ${backupDir}-1`);
+    // A fresh backup of the applied state comes first, in its own row.
+    expect(result.out).toContain('example.com: backup 2 saved');
+    expect((await store.listBackups('example.com')).map((b) => b.id)).toEqual([1, 2]);
     expect(result.out).toContain('example.com: restored, read-back matches the backup');
 
     const strip = (rules: LiveRule[] | undefined) => rules?.map(({ version: _v, last_updated: _l, ...rest }) => rest);
@@ -297,13 +288,31 @@ describe('restore (C15)', () => {
   });
 
   it('restore --write with no TTY and no --yes exits 2 with no write', async () => {
-    addLegacyZone();
+    await addLegacyZone();
     expect((await cli('apply', 'example.com', '--write', '--yes')).code).toBe(0);
     const writes = api.writes.length;
     isTTY = false;
-    const result = await cli('restore', 'example.com', STAMP, '--write');
+    const result = await cli('restore', 'example.com', '1', '--write');
     expect(result.code).toBe(2);
     expect(api.writes).toHaveLength(writes);
+  });
+
+  it('refuses a backup id that is missing or belongs to another zone', async () => {
+    await addLegacyZone();
+    await addNewZone();
+    expect((await cli('apply', 'example.com', '--write', '--yes')).code).toBe(0);
+    const other = await cli('restore', 'example.org', '1');
+    expect(other.code).toBe(2);
+    expect(other.err).toBe('example.org: error: no backup 1 for this zone; list them with flarewall backups example.org');
+    expect((await cli('restore', 'example.com', '9')).code).toBe(2);
+    expect((await cli('restore', 'example.com', 'latest')).err).toBe('restore takes a zone name and a backup id');
+  });
+
+  it('backups lists the stored backups of a zone', async () => {
+    await addLegacyZone();
+    expect((await cli('backups', 'example.com')).out).toBe('example.com: no backups');
+    expect((await cli('apply', 'example.com', '--write', '--yes')).code).toBe(0);
+    expect((await cli('backups', 'example.com')).out).toBe(`#1  ${NOW.toISOString()}  example.com  zone ${IDS.com}`);
   });
 });
 
@@ -324,7 +333,7 @@ describe('planZone', () => {
 
 describe('applyInventoryZone', () => {
   it('renders the inventory against live DNS and dry-runs the zone with no write', async () => {
-    addLegacyZone();
+    await addLegacyZone();
     const inventory = parseInventory(readFixture(`legacy-script/${LEGACY_CASE}/inventory.yaml`));
     const backup = async () => {
       throw new Error('a dry run writes no backup');

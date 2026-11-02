@@ -79,7 +79,7 @@ const type = (state: TuiState, text: string) => run(state, [...text].map(key));
 /** A state with every zone loaded and reported. rows: 11 gives a body of 2 lines, so half a page is 1. */
 function loaded(size: { columns?: number; rows?: number } = {}): TuiState {
   const inventories = ZONES.filter((z) => z !== 'e.example.com').map((z, i) => inventory(z, i + 1));
-  const start = run(initialState({ dataDir: '/data', columns: size.columns ?? 200, rows: size.rows ?? 30 }), [{ type: 'start' }]);
+  const start = run(initialState({ dbPath: '/data/flarewall.sqlite', columns: size.columns ?? 200, rows: size.rows ?? 30 }), [{ type: 'start' }]);
   const gen = start.state.gen;
   return run(start.state, [
     { type: 'data-loaded', gen, data: { baseline: defaultBaseline(), inventories } },
@@ -345,7 +345,7 @@ describe('TUI reducer, FILTER', () => {
 
 describe('TUI reducer, data events', () => {
   it('rows show loading after the data loads and before each report', () => {
-    const start = run(initialState({ dataDir: '/data', columns: 200, rows: 30 }), [{ type: 'start' }]);
+    const start = run(initialState({ dbPath: '/data/flarewall.sqlite', columns: 200, rows: 30 }), [{ type: 'start' }]);
     expect(start.effects).toEqual([{ kind: 'load', gen: 1 }]);
     const s = update(start.state, { type: 'data-loaded', gen: 1, data: { baseline: defaultBaseline(), inventories: [inventory('a.example.com', 1)] } }).state;
     expect(s.zones.map((z) => [z.zone, z.report])).toEqual([['a.example.com', undefined]]);
@@ -530,13 +530,13 @@ describe('TUI reducer, a write and CONFIRM', () => {
     const s = confirming();
     const r = run(s, [
       key('y'),
-      { type: 'backup-written', zone: 'b.example.net', path: '/data/backups/b.example.net/20261021T081500Z' },
+      { type: 'backup-written', zone: 'b.example.net', name: 'backup 1' },
       { type: 'zone-done', zone: 'b.example.net', outcome: 'applied' },
     ]);
     expect(r.state.zones.find((z) => z.zone === 'b.example.net')?.report).toBeUndefined();
     expect(paneText(r.state)).toEqual([
       ...planLines(PLAN_B),
-      'b.example.net: backup written to /data/backups/b.example.net/20261021T081500Z',
+      'b.example.net: backup 1 saved',
       `b.example.net: ${applyOutcomeText('applied')}`,
     ]);
     expect(r.state.writeFailed).toBe(false);
@@ -545,12 +545,12 @@ describe('TUI reducer, a write and CONFIRM', () => {
   it('a failed write shows the error and the backup path, marks the row error, and records the failure', () => {
     const r = run(confirming(), [
       key('y'),
-      { type: 'backup-written', zone: 'b.example.net', path: '/data/backups/b.example.net/20261021T081500Z' },
+      { type: 'backup-written', zone: 'b.example.net', name: 'backup 1' },
       { type: 'zone-failed', zone: 'b.example.net', error: 'updatePhase failed: 403' },
     ]);
     expect(paneText(r.state)).toEqual([
       ...planLines(PLAN_B),
-      'b.example.net: backup written to /data/backups/b.example.net/20261021T081500Z',
+      'b.example.net: backup 1 saved',
       'b.example.net: error: updatePhase failed: 403',
     ]);
     expect(r.state.zones.find((z) => z.zone === 'b.example.net')?.report?.state).toBe('error');
@@ -635,11 +635,11 @@ describe('TUI reducer, + add', () => {
 
   it('after the add, the TUI reloads and keeps the result line of each zone', () => {
     const s = press(select(loaded(), 'e.example.com'), '+').state;
-    const r = run(s, [{ type: 'zone-added', zone: 'e.example.com', path: '/data/inventory/x/e.example.com.yaml' }, { type: 'adds-done' }]);
+    const r = run(s, [{ type: 'zone-added', zone: 'e.example.com', revision: 'inventory revision 7' }, { type: 'adds-done' }]);
     expect(r.effects).toEqual([{ kind: 'load', gen: s.gen + 1 }]);
     expect(r.state.mode).toEqual({ kind: 'normal' });
     expect(r.state.adding).toBeUndefined();
-    expect(paneText(r.state)).toEqual(['e.example.com: wrote /data/inventory/x/e.example.com.yaml; put each host in hosts.api or hosts.wordpress, then press R']);
+    expect(paneText(r.state)).toEqual(['e.example.com: saved inventory revision 7; sort its hosts with flarewall edit e.example.com, then press R']);
   });
 
   it('a failed add shows its error, and the zone stays selected through the reload', () => {
@@ -659,7 +659,7 @@ describe('TUI reducer, + add', () => {
     const s = press(select(loaded(), 'e.example.com'), '+').state;
     const r = press(s, 'ctrl-c');
     expect(r.effects).toEqual([]);
-    const end = run(r.state, [{ type: 'zone-added', zone: 'e.example.com', path: '/data/x.yaml' }, { type: 'adds-done' }]);
+    const end = run(r.state, [{ type: 'zone-added', zone: 'e.example.com', revision: 'inventory revision 7' }, { type: 'adds-done' }]);
     expect(end.effects).toEqual([{ kind: 'quit' }]);
   });
 
@@ -694,10 +694,10 @@ describe('TUI reducer, review fixes', () => {
   it('a written zone stays in view under a state filter while it refreshes', () => {
     let s = run(loaded(), [key('f'), key('f')]).state; // state: drift
     expect(names(s)).toEqual(['b.example.net']);
-    s = run(s, [key('a'), { type: 'confirm-asked', zone: 'b.example.net' }, key('y'), { type: 'backup-written', zone: 'b.example.net', path: '/data/backups/b' }, { type: 'zone-done', zone: 'b.example.net', outcome: 'applied' }]).state;
+    s = run(s, [key('a'), { type: 'confirm-asked', zone: 'b.example.net' }, key('y'), { type: 'backup-written', zone: 'b.example.net', name: 'backup 1' }, { type: 'zone-done', zone: 'b.example.net', outcome: 'applied' }]).state;
     expect(names(s)).toEqual(['b.example.net']);
     expect(s.selected).toBe('b.example.net');
-    expect(paneText(s)).toContain('b.example.net: backup written to /data/backups/b');
+    expect(paneText(s)).toContain('b.example.net: backup 1 saved');
   });
 });
 
@@ -719,8 +719,8 @@ function body(state: TuiState): string[] {
 describe('TUI screen helpers', () => {
   it('listNotice names the load step while the list is empty, then why no row shows', () => {
     const empty = { baseline: defaultBaseline(), inventories: [] };
-    const start = run(initialState({ dataDir: '/data', columns: 200, rows: 30 }), [{ type: 'start' }]).state;
-    expect(listNotice(start)).toEqual({ text: 'Reading the data repo at /data', busy: true });
+    const start = run(initialState({ dbPath: '/data/flarewall.sqlite', columns: 200, rows: 30 }), [{ type: 'start' }]).state;
+    expect(listNotice(start)).toEqual({ text: 'Reading the database at /data/flarewall.sqlite', busy: true });
     expect(diffPaneTitle(start)).toBe('Loading');
     const read = run(start, [{ type: 'data-loaded', gen: start.gen, data: empty }]).state;
     expect(listNotice(read)).toEqual({ text: 'Listing the zones the token can see on Cloudflare', busy: true });
